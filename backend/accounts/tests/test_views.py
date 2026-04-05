@@ -237,6 +237,24 @@ class MeViewTest(TestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.full_name, "Updated Name")
 
+    def test_patch_me_strips_whitespace_from_full_name(self):
+        response = self.client.patch(
+            "/api/auth/me/",
+            {"full_name": "  Trimmed  "},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.full_name, "Trimmed")
+
+    def test_patch_me_full_name_too_long_returns_400(self):
+        response = self.client.patch(
+            "/api/auth/me/",
+            {"full_name": "x" * 151},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_patch_me_ignores_disallowed_fields(self):
         original_email = self.user.email
         self.client.patch(

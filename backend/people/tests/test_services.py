@@ -734,6 +734,15 @@ class DetectDuplicatePersonsMobileTest(TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["reason"], "phone_match")
 
+    def test_detects_phone_field_match_via_phone_param(self):
+        # phone stored in phone column is matched when same value is passed as phone param
+        make_person(first_name="Dan", last_name="Brown", phone="01111222233")
+        result = detect_duplicate_persons(
+            first_name="Different", last_name="Name", phone="01111222233"
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["reason"], "phone_match")
+
     def test_returns_empty_for_blank_phone_and_no_other_match(self):
         make_person(first_name="Dan", last_name="Brown", phone="01234567890")
         result = detect_duplicate_persons(

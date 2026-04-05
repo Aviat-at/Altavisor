@@ -75,12 +75,16 @@ export default function SettingsPage() {
           label="Soft deactivation"
           hint="Records are never hard-deleted"
         >
-          <Typography variant="body2" component="div" sx={{ fontSize: "0.8rem", color: "text.secondary", lineHeight: 1.6 }}>
-            Deactivating a person closes all their active organisation links and removes
-            all category assignments. The record remains queryable in the API with
-            <Box component="span" sx={{ mx: 0.5 }}><InfoChip label="is_active=false" /></Box>.
-            Hard deletion is not supported.
-          </Typography>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary", lineHeight: 1.6 }}>
+              Deactivating a person closes all their active organisation links and removes
+              all category assignments. The record remains queryable in the API with <strong>is_active=false</strong>.
+              Hard deletion is not supported.
+            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <InfoChip label="is_active=false" />
+            </Box>
+          </Box>
         </FieldRow>
         <FieldRow
           label="Notes"
@@ -109,13 +113,19 @@ export default function SettingsPage() {
         </FieldRow>
         <FieldRow label="Name match" hint="Medium confidence">
           <Box sx={{ display: "flex", flexDirection: "column", gap: 0.8 }}>
-            <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary" }}>
-              Case-insensitive match on both{" "}
-              <Box component="span" sx={{ mx: 0.4 }}><InfoChip label="first_name" /></Box>
-              {" "}and{" "}
-              <Box component="span" sx={{ mx: 0.4 }}><InfoChip label="last_name" /></Box>
-              {" "}triggers a medium-confidence warning.
-            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexWrap: "wrap" }}>
+              <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary" }}>
+                Case-insensitive match on both
+              </Typography>
+              <InfoChip label="first_name" />
+              <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary" }}>
+                and
+              </Typography>
+              <InfoChip label="last_name" />
+              <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary" }}>
+                triggers a medium-confidence warning.
+              </Typography>
+            </Box>
             <InfoChip label="confidence: medium" />
           </Box>
         </FieldRow>
@@ -129,12 +139,15 @@ export default function SettingsPage() {
           </Box>
         </FieldRow>
         <FieldRow label="Override">
-          <Typography variant="body2" component="div" sx={{ fontSize: "0.8rem", color: "text.secondary", lineHeight: 1.6 }}>
-            After reviewing the candidates shown in the Directory dialog, a user can
-            confirm creation with{" "}
-            <Box component="span" sx={{ mx: 0.4 }}><InfoChip label="force=true" /></Box>.
-            {" "}This is surfaced in the UI as the <strong>Create Anyway</strong> button.
-          </Typography>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary", lineHeight: 1.6 }}>
+              After reviewing the candidates shown in the Directory dialog, a user can
+              confirm creation with <strong>force=true</strong>. This is surfaced in the UI as the <strong>Create Anyway</strong> button.
+            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <InfoChip label="force=true" />
+            </Box>
+          </Box>
         </FieldRow>
       </Section>
 
@@ -144,12 +157,16 @@ export default function SettingsPage() {
         description="How person categories work and their constraints."
       >
         <FieldRow label="System categories" hint="Protected by the service layer">
-          <Typography variant="body2" component="div" sx={{ fontSize: "0.8rem", color: "text.secondary", lineHeight: 1.6 }}>
-            Categories created by the application (marked{" "}
-            <Box component="span" sx={{ mx: 0.4 }}><InfoChip label="is_system=true" /></Box>)
-            {" "}cannot be renamed, deactivated, or deleted. They are shown with a lock icon
-            in the Categories tab.
-          </Typography>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary", lineHeight: 1.6 }}>
+              Categories created by the application cannot be renamed, deactivated, or deleted. They are shown with a lock icon
+              in the Categories tab.
+            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <span>Marked as:</span>
+              <InfoChip label="is_system=true" />
+            </Box>
+          </Box>
         </FieldRow>
         <FieldRow label="Slugs" hint="Auto-generated">
           <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary" }}>
@@ -172,14 +189,17 @@ export default function SettingsPage() {
       >
         <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5 }}>
           <MergeRoundedIcon sx={{ fontSize: 18, color: "text.disabled", mt: 0.2, flexShrink: 0 }} />
-          <Typography variant="body2" component="div" sx={{ fontSize: "0.8rem", color: "text.secondary", lineHeight: 1.6 }}>
-            The merge endpoint ({" "}
-            <Box component="span" sx={{ mx: 0.4 }}><InfoChip label="POST /api/people/persons/:id/merge/" /></Box>)
-            {" "}currently returns{" "}
-            <Box component="span" sx={{ mx: 0.4 }}><InfoChip label="501 Not Implemented" /></Box>.
-            Full merge support — re-pointing all downstream foreign keys and
-            deactivating the source record — will be added in a future release.
-          </Typography>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <Typography variant="body2" sx={{ fontSize: "0.8rem", color: "text.secondary", lineHeight: 1.6 }}>
+              The merge endpoint currently returns <strong>501 Not Implemented</strong>.
+              Full merge support — re-pointing all downstream foreign keys and
+              deactivating the source record — will be added in a future release.
+            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+              <span style={{ fontSize: "0.8rem" }}>Endpoint:</span>
+              <InfoChip label="POST /api/people/persons/:id/merge/" />
+            </Box>
+          </Box>
         </Box>
       </Section>
     </Box>

@@ -102,7 +102,7 @@ export function createCategory(data: {
   name: string;
   description?: string;
 }): Promise<PersonCategory> {
-  return request<PersonCategory>("/categories/", {
+  return request<PersonCategory>("/categories/create/", {
     method: "POST",
     body: JSON.stringify(data),
   });

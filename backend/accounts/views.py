@@ -105,12 +105,25 @@ def me(request):
     if request.method == "GET":
         return Response(UserSerializer(request.user).data)
 
-    allowed = {k: v for k, v in request.data.items() if k in ("full_name",)}
-    serializer = UserSerializer(request.user, data=allowed, partial=True)
-    if serializer.is_valid():
-        serializer.save()
-        return Response(serializer.data)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    # Only full_name may be updated via this endpoint. UserSerializer is
+    # read-only by design (safe for GET responses), so we update directly.
+    if "full_name" in request.data:
+        full_name = request.data["full_name"]
+        if not isinstance(full_name, str):
+            return Response(
+                {"detail": "full_name must be a string."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        full_name = full_name.strip()
+        if len(full_name) > 150:
+            return Response(
+                {"detail": "full_name may not exceed 150 characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = request.user
+        user.full_name = full_name
+        user.save(update_fields=["full_name"])
+    return Response(UserSerializer(request.user).data)
 
 
 # ─── Change password ──────────────────────────────────────────────────────────

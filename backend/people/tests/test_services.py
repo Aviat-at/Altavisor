@@ -719,3 +719,208 @@ class UpdateOrganizationRelationshipTest(TestCase):
     def test_raises_if_not_found(self):
         with self.assertRaises(OrganizationRelationNotFoundError):
             update_organization_relationship(relation_id=99999, data={"role": "x"})
+
+
+# ─── Additional edge-case coverage ────────────────────────────────────────────
+
+class DetectDuplicatePersonsMobileTest(TestCase):
+    """Mobile phone field is a separate column from phone."""
+
+    def test_detects_mobile_match(self):
+        make_person(first_name="Carol", last_name="Lee", mobile="07700900123")
+        result = detect_duplicate_persons(
+            first_name="Different", last_name="Person", phone="07700900123"
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["reason"], "phone_match")
+
+    def test_returns_empty_for_blank_phone_and_no_other_match(self):
+        make_person(first_name="Dan", last_name="Brown", phone="01234567890")
+        result = detect_duplicate_persons(
+            first_name="Different", last_name="Name", phone=""
+        )
+        self.assertEqual(result, [])
+
+
+class CreatePersonEdgeCaseTest(TestCase):
+    def test_strips_whitespace_from_first_and_last_name(self):
+        person = create_person(
+            data={"first_name": "  Alice  ", "last_name": "  Smith  "}
+        )
+        self.assertEqual(person.first_name, "Alice")
+        self.assertEqual(person.last_name, "Smith")
+
+    def test_stores_optional_fields(self):
+        person = create_person(
+            data={
+                "first_name": "Bob",
+                "last_name": "Jones",
+                "phone": "01234567890",
+                "mobile": "07700900000",
+                "gender": "male",
+                "preferred_name": "Bobby",
+            }
+        )
+        self.assertEqual(person.phone, "01234567890")
+        self.assertEqual(person.mobile, "07700900000")
+        self.assertEqual(person.gender, "male")
+        self.assertEqual(person.preferred_name, "Bobby")
+
+
+class UpdatePersonEdgeCaseTest(TestCase):
+    def setUp(self):
+        self.person = make_person(
+            first_name="Alice",
+            last_name="Smith",
+            phone="01111111111",
+        )
+
+    def test_updates_phone(self):
+        updated = update_person(
+            person_id=self.person.id, data={"phone": "02222222222", "force": True}
+        )
+        self.assertEqual(updated.phone, "02222222222")
+
+    def test_updates_gender(self):
+        updated = update_person(
+            person_id=self.person.id, data={"gender": "female", "force": True}
+        )
+        self.assertEqual(updated.gender, "female")
+
+    def test_partial_update_preserves_untouched_fields(self):
+        original_last = self.person.last_name
+        update_person(
+            person_id=self.person.id, data={"first_name": "Alicia", "force": True}
+        )
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.last_name, original_last)
+
+
+class CreateAddressEdgeCaseTest(TestCase):
+    def test_raises_if_person_inactive(self):
+        person = make_person(is_active=False)
+        with self.assertRaises(PersonNotFoundError):
+            create_address(
+                person_id=person.id,
+                data={"line1": "1 St", "city": "London", "country": "UK"},
+            )
+
+    def test_default_label_is_home(self):
+        person = make_person()
+        addr = create_address(
+            person_id=person.id,
+            data={"line1": "1 St", "city": "London", "country": "UK"},
+        )
+        from people.models import PersonAddress
+        self.assertEqual(addr.label, PersonAddress.Label.HOME)
+
+    def test_non_default_address_does_not_affect_existing_default(self):
+        person = make_person()
+        first = create_address(
+            person_id=person.id,
+            data={"line1": "1 St", "city": "London", "country": "UK", "is_default": True},
+        )
+        create_address(
+            person_id=person.id,
+            data={"line1": "2 St", "city": "Birmingham", "country": "UK", "is_default": False},
+        )
+        first.refresh_from_db()
+        self.assertTrue(first.is_default)
+
+
+class UpdateAddressEdgeCaseTest(TestCase):
+    def setUp(self):
+        self.person = make_person()
+        from people.models import PersonAddress
+        self.addr = PersonAddress.objects.create(
+            person=self.person, line1="1 St", city="London", country="UK", is_default=True
+        )
+
+    def test_setting_already_default_does_not_raise(self):
+        # Updating is_default=True on an address already default is a no-op demotion
+        from people.models import PersonAddress
+        updated = update_address(
+            person_id=self.person.id,
+            address_id=self.addr.id,
+            data={"is_default": True},
+        )
+        self.assertTrue(updated.is_default)
+
+    def test_raises_if_address_belongs_to_different_person(self):
+        other_person = make_person(first_name="Other", last_name="Person", email="o@test.com")
+        with self.assertRaises(AddressNotFoundError):
+            update_address(
+                person_id=other_person.id,
+                address_id=self.addr.id,
+                data={"city": "Manchester"},
+            )
+
+
+class CreateNoteEdgeCaseTest(TestCase):
+    def test_raises_if_person_inactive(self):
+        person = make_person(is_active=False)
+        with self.assertRaises(PersonNotFoundError):
+            create_note(person_id=person.id, body="Some note.")
+
+
+class LinkOrganizationEdgeCaseTest(TestCase):
+    def test_raises_if_person_inactive(self):
+        person = make_person(is_active=False)
+        with self.assertRaises(PersonNotFoundError):
+            link_person_to_organization(
+                data={
+                    "person_id": person.id,
+                    "organization_id": 1,
+                    "organization_type": "customer",
+                    "role": "contact",
+                }
+            )
+
+    def test_stores_started_on(self):
+        from datetime import date
+        person = make_person()
+        today = date.today()
+        rel = link_person_to_organization(
+            data={
+                "person_id": person.id,
+                "organization_id": 5,
+                "organization_type": "supplier",
+                "role": "rep",
+                "started_on": today,
+            }
+        )
+        self.assertEqual(rel.started_on, today)
+
+    def test_stores_is_primary(self):
+        person = make_person()
+        rel = link_person_to_organization(
+            data={
+                "person_id": person.id,
+                "organization_id": 7,
+                "organization_type": "partner",
+                "role": "manager",
+                "is_primary": True,
+            }
+        )
+        self.assertTrue(rel.is_primary)
+
+
+class AssignCategoryEdgeCaseTest(TestCase):
+    def test_reactivated_assignment_updates_assigned_by(self):
+        from django.contrib.auth import get_user_model
+        UserModel = get_user_model()
+        person = make_person()
+        category = make_category()
+        first_user = UserModel.objects.create_user(email="first@test.com", password="pass1234!")
+        second_user = UserModel.objects.create_user(email="second@test.com", password="pass1234!")
+
+        assignment = assign_category(
+            person_id=person.id, category_id=category.id, assigned_by=first_user
+        )
+        assignment.is_active = False
+        assignment.save()
+
+        reactivated = assign_category(
+            person_id=person.id, category_id=category.id, assigned_by=second_user
+        )
+        self.assertEqual(reactivated.assigned_by, second_user)

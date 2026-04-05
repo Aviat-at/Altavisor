@@ -706,3 +706,129 @@ class PersonAttachmentsViewTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])
+
+
+# ─── Authentication guards on sub-resource endpoints ──────────────────────────
+
+class SubResourceAuthTest(TestCase):
+    """Verify that sub-resource endpoints all require authentication."""
+
+    def setUp(self):
+        self.client = APIClient()
+        # Create a real person so the person_id exists (returns 401 not 404)
+        from django.contrib.auth import get_user_model
+        UserModel = get_user_model()
+        admin = UserModel.objects.create_user(
+            email="setup@test.com", password="pass1234!", is_staff=True, is_superuser=True
+        )
+        auth_client = APIClient()
+        auth_client.force_authenticate(user=admin)
+        r = auth_client.post(
+            "/api/people/persons/",
+            {"first_name": "Auth", "last_name": "Test", "force": True},
+            format="json",
+        )
+        self.person_id = r.data["id"]
+
+    def _assert_requires_auth(self, method, url, data=None):
+        fn = getattr(self.client, method)
+        kwargs = {"format": "json"} if data is not None else {}
+        if data is not None:
+            response = fn(url, data, **kwargs)
+        else:
+            response = fn(url)
+        self.assertEqual(
+            response.status_code, 401,
+            f"Expected 401 for {method.upper()} {url}, got {response.status_code}",
+        )
+
+    def test_addresses_list_requires_auth(self):
+        self._assert_requires_auth("get", f"/api/people/persons/{self.person_id}/addresses/")
+
+    def test_addresses_create_requires_auth(self):
+        self._assert_requires_auth(
+            "post",
+            f"/api/people/persons/{self.person_id}/addresses/",
+            {"line1": "1 St", "city": "London", "country": "UK"},
+        )
+
+    def test_notes_list_requires_auth(self):
+        self._assert_requires_auth("get", f"/api/people/persons/{self.person_id}/notes/")
+
+    def test_notes_create_requires_auth(self):
+        self._assert_requires_auth(
+            "post",
+            f"/api/people/persons/{self.person_id}/notes/",
+            {"body": "Note."},
+        )
+
+    def test_categories_list_requires_auth(self):
+        self._assert_requires_auth("get", f"/api/people/persons/{self.person_id}/categories/")
+
+    def test_organizations_list_requires_auth(self):
+        self._assert_requires_auth("get", f"/api/people/persons/{self.person_id}/organizations/")
+
+    def test_person_detail_requires_auth(self):
+        self._assert_requires_auth("get", f"/api/people/persons/{self.person_id}/")
+
+    def test_deactivate_requires_auth(self):
+        self._assert_requires_auth("post", f"/api/people/persons/{self.person_id}/deactivate/")
+
+
+# ─── Person list — category filter ────────────────────────────────────────────
+
+class PersonListCategoryFilterTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = make_user()
+        self.client.force_authenticate(user=self.user)
+
+    def test_filter_by_category_id(self):
+        cat = make_category(name="VIP", slug="vip")
+        person_vip = make_person(first_name="VIP", last_name="Person", email="vip@test.com")
+        make_person(first_name="Regular", last_name="Person", email="reg@test.com")
+        PersonCategoryAssignment.objects.create(person=person_vip, category=cat)
+        response = self.client.get(f"/api/people/persons/?category_id={cat.id}")
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], person_vip.id)
+
+    def test_filter_by_nonexistent_category_id_returns_empty(self):
+        make_person()
+        response = self.client.get("/api/people/persons/?category_id=99999")
+        self.assertEqual(response.data["count"], 0)
+
+
+# ─── Person note — inactive person ────────────────────────────────────────────
+
+class PersonNoteInactivePersonTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = make_user()
+        self.client.force_authenticate(user=self.user)
+        self.person = make_person(is_active=False)
+
+    def test_create_note_for_inactive_person_returns_404(self):
+        response = self.client.post(
+            f"/api/people/persons/{self.person.id}/notes/",
+            {"body": "Note for inactive."},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+
+# ─── Address for inactive person ──────────────────────────────────────────────
+
+class AddressInactivePersonTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = make_user()
+        self.client.force_authenticate(user=self.user)
+        self.person = make_person(is_active=False)
+
+    def test_create_address_for_inactive_person_returns_404(self):
+        response = self.client.post(
+            f"/api/people/persons/{self.person.id}/addresses/",
+            {"line1": "1 St", "city": "London", "country": "UK"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)

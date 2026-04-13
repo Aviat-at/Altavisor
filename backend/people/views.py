@@ -92,8 +92,10 @@ def persons_list_create(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        is_active_param = request.query_params.get("is_active")
+        is_active_filter = None if is_active_param is None else is_active_param.lower() == "true"
         result = selectors.list_persons(
-            is_active=request.query_params.get("is_active", "true").lower() != "false",
+            is_active=is_active_filter,
             search=request.query_params.get("search", "").strip(),
             category_id=category_id,
             page=page,
@@ -194,6 +196,25 @@ def person_deactivate(request, person_id):
         return _conflict(str(exc))
 
     return Response({"detail": "Person deactivated successfully."})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def person_reactivate(request, person_id):
+    """
+    POST /api/people/persons/<id>/reactivate/
+    Reactivates a previously deactivated person.
+    """
+    try:
+        services.reactivate_person(
+            person_id=person_id, reactivated_by=request.user
+        )
+    except PersonNotFoundError:
+        return _not_found(f"Person {person_id} not found.")
+    except PersonInactiveError as exc:
+        return _conflict(str(exc))
+
+    return Response({"detail": "Person reactivated successfully."})
 
 
 @api_view(["POST"])

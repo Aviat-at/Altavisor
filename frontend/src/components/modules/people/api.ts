@@ -90,6 +90,12 @@ export function deactivatePerson(id: number): Promise<{ detail: string }> {
   });
 }
 
+export function reactivatePerson(id: number): Promise<{ detail: string }> {
+  return request<{ detail: string }>(`/persons/${id}/reactivate/`, {
+    method: "POST",
+  });
+}
+
 // ── Categories ────────────────────────────────────────────────────────────────
 
 export function listCategories(params: { is_active?: boolean } = {}): Promise<PersonCategory[]> {

@@ -276,6 +276,30 @@ def deactivate_person(*, person_id: int, deactivated_by=None) -> Person:
     return person
 
 
+@transaction.atomic
+def reactivate_person(*, person_id: int, reactivated_by=None) -> Person:
+    """
+    Reactivate a previously deactivated Person.
+    """
+    try:
+        person = Person.objects.select_for_update().get(id=person_id)
+    except Person.DoesNotExist:
+        raise PersonNotFoundError(f"Person {person_id} not found.")
+
+    if person.is_active:
+        raise PersonInactiveError(f"Person {person_id} is already active.")
+
+    person.is_active = True
+    person.save(update_fields=["is_active", "updated_at"])
+
+    logger.info(
+        "Person reactivated: id=%s by=%s",
+        person.id,
+        getattr(reactivated_by, "email", reactivated_by),
+    )
+    return person
+
+
 def merge_persons(*, source_id: int, target_id: int, merged_by=None) -> None:
     """
     Merge contract placeholder.

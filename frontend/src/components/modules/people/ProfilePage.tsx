@@ -218,7 +218,7 @@ export default function ProfilePage({ personId }: Props) {
     }
   };
 
-  // ── Deactivate ────────────────────────────────────────────────────────────
+  // ── Deactivate / Reactivate ───────────────────────────────────────────────
 
   const handleDeactivate = async () => {
     if (!person || !window.confirm(`Deactivate ${person.full_name}? This will also close all active org relations and category assignments.`)) return;
@@ -229,6 +229,20 @@ export default function ProfilePage({ personId }: Props) {
       loadPerson();
     } catch (err) {
       setDeactivateErr((err as ApiError).body?.detail ?? "Could not deactivate.");
+    } finally {
+      setDeactivating(false);
+    }
+  };
+
+  const handleReactivate = async () => {
+    if (!person || !window.confirm(`Reactivate ${person.full_name}?`)) return;
+    setDeactivating(true);
+    setDeactivateErr(null);
+    try {
+      await api.reactivatePerson(personId!);
+      loadPerson();
+    } catch (err) {
+      setDeactivateErr((err as ApiError).body?.detail ?? "Could not reactivate.");
     } finally {
       setDeactivating(false);
     }
@@ -461,7 +475,7 @@ export default function ProfilePage({ personId }: Props) {
                 >
                   Edit
                 </Button>
-                {isActive && (
+                {isActive ? (
                   <Button
                     size="small" variant="outlined"
                     startIcon={<PersonOffRoundedIcon sx={{ fontSize: "13px !important" }} />}
@@ -470,6 +484,16 @@ export default function ProfilePage({ personId }: Props) {
                     sx={{ flex: 1, borderColor: "divider", color: "error.main", fontSize: "0.75rem", "&:hover": { borderColor: "error.main", bgcolor: "rgba(240,74,74,0.05)" } }}
                   >
                     {deactivating ? "…" : "Deactivate"}
+                  </Button>
+                ) : (
+                  <Button
+                    size="small" variant="outlined"
+                    startIcon={<LockRoundedIcon sx={{ fontSize: "13px !important" }} />}
+                    onClick={handleReactivate}
+                    disabled={deactivating}
+                    sx={{ flex: 1, borderColor: "divider", color: "primary.main", fontSize: "0.75rem", "&:hover": { borderColor: "primary.main", bgcolor: "action.selected" } }}
+                  >
+                    {deactivating ? "…" : "Activate"}
                   </Button>
                 )}
               </Box>

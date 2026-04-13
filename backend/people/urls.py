@@ -29,6 +29,11 @@ urlpatterns = [
         name="people-person-deactivate",
     ),
     path(
+        "persons/<int:person_id>/reactivate/",
+        views.person_reactivate,
+        name="people-person-reactivate",
+    ),
+    path(
         "persons/<int:person_id>/merge/",
         views.person_merge,
         name="people-person-merge",

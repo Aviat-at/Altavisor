@@ -60,7 +60,7 @@ export default function DirectoryPage({ onSelectPerson }: Props) {
   const [searchInput,    setSearchInput]    = useState("");
   const [search,         setSearch]         = useState("");
   const [categoryFilter, setCategoryFilter] = useState<number | "">("");
-  const [showInactive,   setShowInactive]   = useState(false);
+  const [showInactive,   setShowInactive]   = useState(true);
   const [page,           setPage]           = useState(1);
 
   // ── Add person dialog state ─────────────────────────────────────────────────

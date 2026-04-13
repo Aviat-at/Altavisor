@@ -1,0 +1,72 @@
+---
+title: Altavisor — Navigation Flow
+---
+flowchart TD
+    Start([Browser opens /]) --> AuthCheck{access_token\nin localStorage?}
+    AuthCheck -- No --> LoginPage["app/login/page.tsx"]
+    AuthCheck -- Yes --> Shell["AdminShell\nactiveTab = 'overview'\nactiveSubTab = 'summary'"]
+
+    LoginPage --> LoginForm["Enter email + password\nPOST /api/auth/login/"]
+    LoginForm -- success --> StoreToken["Store access_token\n→ redirect to /"]
+    LoginForm -- error --> LoginPage
+
+    StoreToken --> Shell
+
+    Shell --> Sidebar["Sidebar — click a tab icon"]
+
+    Sidebar --> TAB_OV["Tab: Overview"]
+    Sidebar --> TAB_CUST["Tab: Customers"]
+    Sidebar --> TAB_PEOPLE["Tab: People"]
+    Sidebar --> TAB_SET["Tab: Settings"]
+    Sidebar --> TAB_USR["Tab: Users"]
+    Sidebar --> TAB_SEC["Tab: Security"]
+    Sidebar --> TAB_ANA["Tab: Analytics"]
+    Sidebar --> TAB_INF["Tab: Infrastructure"]
+
+    TAB_OV --> OV_SUM["summary\n(KPI cards, recent activity)"]
+    TAB_OV --> OV_ACT["activity\n(activity log)"]
+    TAB_OV --> OV_HLT["health\n(CPU, Memory, Disk, Network)"]
+
+    TAB_CUST --> CUST_DASH["dashboard\n(KPIs, chart, recent customers)"]
+    TAB_CUST --> CUST_MGMT["management\n(search + filter + CRUD table)"]
+    TAB_CUST --> CUST_PROF["profiles\n(profile card + activity timeline)"]
+    TAB_CUST --> CUST_SET["settings\n(onboarding, churn, webhooks)"]
+
+    TAB_PEOPLE --> PEOPLE_DIR["directory\n(paginated list, search, filter)"]
+    TAB_PEOPLE --> PEOPLE_PROF["profile\n(5-panel person detail)"]
+    TAB_PEOPLE --> PEOPLE_CAT["categories\n(list, add, deactivate)"]
+    TAB_PEOPLE --> PEOPLE_SET["settings\n(module reference docs)"]
+
+    PEOPLE_DIR -- "click row → sets selectedPersonId" --> PEOPLE_PROF
+
+    PEOPLE_PROF --> PP_OV["Overview panel\n(contact info, edit, deactivate)"]
+    PEOPLE_PROF --> PP_CAT["Categories panel\n(assign / remove categories)"]
+    PEOPLE_PROF --> PP_ADDR["Addresses panel\n(add, edit, set default)"]
+    PEOPLE_PROF --> PP_NOTE["Notes panel\n(immutable append-only)"]
+    PEOPLE_PROF --> PP_ORG["Organizations panel\n(link org, close relation)"]
+
+    TAB_SET --> SET_GEN["general\n(org name, domain, region, timezone)"]
+    TAB_SET --> SET_APP["appearance\n(density, sidebar, theme, fonts)"]
+    TAB_SET --> SET_INT["integrations\n(Slack, GitHub)"]
+    TAB_SET --> SET_ADV["advanced\n(debug, telemetry, danger zone)"]
+
+    TAB_USR --> USR_ACC["accounts\n(user list with search)"]
+    TAB_USR --> USR_ROL["roles\n(stub)"]
+    TAB_USR --> USR_INV["invites\n(stub)"]
+
+    TAB_SEC --> SEC_AUTH["auth\n(MFA, SSO, session, password policy)"]
+    TAB_SEC --> SEC_AUD["audit\n(audit trail table)"]
+    TAB_SEC --> SEC_POL["policies\n(IP allowlist, brute-force, geo-block)"]
+
+    TAB_ANA --> ANA_USE["usage\n(request metrics, breakdown)"]
+    TAB_ANA --> ANA_REP["reports\n(scheduled reports table)"]
+    TAB_ANA --> ANA_EXP["exports\n(format + date range + dataset selector)"]
+
+    TAB_INF --> INF_ENV["environments\n(Production, Staging, Dev, QA cards)"]
+    TAB_INF --> INF_DEP["deployments\n(deployment history table)"]
+    TAB_INF --> INF_LOG["logs\n(live log stream, level colored)"]
+
+    Shell --> TopBar["TopBar — user menu"]
+    TopBar -- "Logout" --> LogoutAction["POST /api/auth/logout/\nremove access_token\n→ redirect to /login"]
+    LogoutAction --> LoginPage
+```

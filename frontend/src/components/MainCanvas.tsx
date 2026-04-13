@@ -47,9 +47,9 @@ export default function MainCanvas({ tab, subTabId, onSubTabChange }: MainCanvas
       }}>
         <Typography sx={{
           fontFamily: "'Syne', sans-serif",
-          fontWeight: 700,
+          fontWeight: 1700,
           fontSize: "0.75rem",
-          color: "text.disabled",
+          color: "primary.main",
           textTransform: "uppercase",
           letterSpacing: "0.08em",
           flexShrink: 0,

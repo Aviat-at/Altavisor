@@ -1,0 +1,53 @@
+---
+title: Altavisor — Component Tree
+---
+graph TD
+    Layout["app/layout.tsx\n(Root HTML + ThemeRegistry)"]
+    Layout --> Page["app/page.tsx\n(Auth Guard)"]
+
+    Page -- "no token" --> Login["app/login/page.tsx\n(Email + Password Form)"]
+    Page -- "token present" --> AdminShell["AdminShell.tsx\n(owns activeTab + activeSubTab state)"]
+
+    AdminShell --> TopBar["TopBar.tsx\n(52px fixed — logo, search, theme toggle, user menu)"]
+    AdminShell --> Sidebar["Sidebar.tsx\n(72px fixed — icon nav, active pill indicator)"]
+    AdminShell --> MainCanvas["MainCanvas.tsx\n(resolves + renders active module)"]
+    AdminShell --> FooterBar["FooterBar.tsx\n(32px fixed — version, region, API console)"]
+
+    MainCanvas -- "overview" --> OvMod["modules/overview/index.tsx"]
+    MainCanvas -- "customers" --> CustMod["modules/customers/index.tsx"]
+    MainCanvas -- "people" --> PeopleMod["modules/people/index.tsx\n(owns selectedPersonId state)"]
+    MainCanvas -- "settings" --> SettDash["dashboards/SettingsDashboard.tsx"]
+    MainCanvas -- "users" --> UserDash["dashboards/UsersDashboard.tsx"]
+    MainCanvas -- "security" --> SecDash["dashboards/SecurityDashboard.tsx"]
+    MainCanvas -- "analytics" --> AnaDash["dashboards/AnalyticsDashboard.tsx"]
+    MainCanvas -- "infrastructure" --> InfraDash["dashboards/InfrastructureDashboard.tsx"]
+
+    OvMod --> OvDash["dashboards/OverviewDashboard.tsx\n(summary + health panels)"]
+
+    CustMod -- "dashboard" --> CustDashPage["DashboardPage.tsx\n(KPI cards, bar chart, recent table)"]
+    CustMod -- "management" --> CustMgmt["ManagementPage.tsx\n(CRUD table, search, filter, Add dialog)"]
+    CustMod -- "profiles" --> CustProfile["ProfilePage.tsx\n(profile card + activity timeline)"]
+    CustMod -- "settings" --> CustSettings["SettingsPage.tsx\n(onboarding, churn, webhooks)"]
+
+    PeopleMod -- "directory" --> PeopleDir["DirectoryPage.tsx\n(paginated list, search, category filter, Add Person dialog)"]
+    PeopleMod -- "profile" --> PeopleProfile["ProfilePage.tsx\n(5 panels via internal tabs)"]
+    PeopleMod -- "categories" --> PeopleCats["CategoriesPage.tsx\n(list, add, deactivate, inline edit)"]
+    PeopleMod -- "settings" --> PeopleSettings["SettingsPage.tsx\n(module reference docs)"]
+
+    PeopleProfile --> PanelOverview["Panel: Overview\n(name, email, phone, DOB, gender, edit, deactivate)"]
+    PeopleProfile --> PanelCategories["Panel: Categories\n(assigned list, assign/remove)"]
+    PeopleProfile --> PanelAddresses["Panel: Addresses\n(list, add, edit, set default)"]
+    PeopleProfile --> PanelNotes["Panel: Notes\n(immutable append-only timeline)"]
+    PeopleProfile --> PanelOrgs["Panel: Organizations\n(linked orgs, role, dates, close relation)"]
+
+    PeopleDir -. "uses" .-> PeopleAPI["people/api.ts\n(all /api/people/ calls)"]
+    PeopleProfile -. "uses" .-> PeopleAPI
+    PeopleCats -. "uses" .-> PeopleAPI
+    PeopleAPI -. "types from" .-> PeopleTypes["people/types.ts\n(all domain interfaces)"]
+
+    Layout --> ThemeReg["ThemeRegistry.tsx\n(MUI provider, ColorModeContext, useColorMode hook)"]
+    ThemeReg -. "reads/writes" .-> ThemeLib["lib/theme.ts\n(darkTheme + lightTheme factory)"]
+
+    Sidebar -. "reads" .-> NavConfig["config/nav.ts\n(single source of truth — all tabs + subtabs)"]
+    MainCanvas -. "reads" .-> NavConfig
+```

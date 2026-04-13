@@ -142,7 +142,7 @@ The project is in **active early development**. Core infrastructure, authenticat
 |---|---|---|---|---|
 | 7 | Person Module (incl. categories) | ✅ | ✅ | ✅ Complete |
 | 8 | Partner Company Module (incl. categories) | ⬜ | ⬜ | ⬜ Planned |
-| 9 | Organization–Person Relationship Management | ✅ | ✅ | ✅ Complete |
+| 9 | Organization–Person Relationship Management | ✅ | 🔨 Embedded in People Profile | 🔨 In Progress |
 | 10 | Product and Service Management | ⬜ | ⬜ | ⬜ Planned |
 | 11 | Pricing, Discount, and Access Profile Management | ⬜ | ⬜ | ⬜ Planned |
 

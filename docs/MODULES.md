@@ -801,7 +801,7 @@ POST           /api/companies/categories/<id>/deactivate/
 
 ### 9. Organization–Person Relationship Management
 
-**Status:** `✅ Complete` (backend); frontend rendered inside Person Profile → Organizations panel
+**Status:** `🔨 In Progress` — backend complete; frontend embedded inside People Profile → Organizations panel only (no standalone nav entry, no company-side view)
 
 Manages relationships between persons and partner companies. Tracks who represents whom and in what capacity. One person can link to multiple companies; one company can have multiple linked persons.
 
@@ -830,7 +830,10 @@ Manages relationships between persons and partner companies. Tracks who represen
 
 **Endpoints:** All under `/api/people/persons/<id>/organizations/` — documented in Module 7.
 
-**Reciprocal view (planned):** When the Company module ships, `GET /api/companies/companies/<id>/persons/` will return all person relations for a company, queried from the same `OrganizationPersonRelation` table filtered by `organization_id` and `organization_type`.
+**What's missing:**
+- No standalone nav tab — accessible only via People → Profile → Organizations panel
+- No company-side view — when Partner Company module ships, `GET /api/companies/companies/<id>/persons/` will show all linked persons from the company's perspective, queried from the same `OrganizationPersonRelation` table filtered by `organization_id` and `organization_type`
+- No standalone relationship browser across all persons and companies
 
 #### Frontend
 

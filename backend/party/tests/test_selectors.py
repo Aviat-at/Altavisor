@@ -138,8 +138,8 @@ class GetPartyNotesTest(TestCase):
 class GetPartyRelationshipsTest(TestCase):
     def setUp(self):
         self.person = make_party(party_type=Party.PartyType.PERSON)
-        self.org1 = make_party(party_type=Party.PartyType.COMPANY)
-        self.org2 = make_party(party_type=Party.PartyType.COMPANY)
+        self.org1 = make_party(party_type=Party.PartyType.ORGANIZATION)
+        self.org2 = make_party(party_type=Party.PartyType.ORGANIZATION)
 
     def test_filter_by_from_party(self):
         PartyRelationship.objects.create(

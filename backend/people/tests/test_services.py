@@ -300,7 +300,7 @@ class DeactivatePersonTest(TestCase):
             deactivate_person(person_id=self.person.id)
 
     def test_does_not_affect_already_closed_org_relations(self):
-        org = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
+        org = Party.objects.create(party_type=Party.PartyType.ORGANIZATION, is_active=True)
         rel = PartyRelationship.objects.create(
             from_party=self.person.party,
             to_party=org,
@@ -622,7 +622,7 @@ class LinkPersonToOrganizationTest(TestCase):
     def setUp(self):
         self.person = make_person()
         self.org_party = Party.objects.create(
-            party_type=Party.PartyType.COMPANY, is_active=True
+            party_type=Party.PartyType.ORGANIZATION, is_active=True
         )
         self.org_data = {
             "person_id": None,
@@ -652,7 +652,7 @@ class LinkPersonToOrganizationTest(TestCase):
 
     def test_different_to_party_is_allowed(self):
         self._link()
-        org2 = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
+        org2 = Party.objects.create(party_type=Party.PartyType.ORGANIZATION, is_active=True)
         rel2 = self._link(to_party_id=org2.id)
         self.assertTrue(rel2.is_active)
 
@@ -669,7 +669,7 @@ class CloseOrganizationRelationshipTest(TestCase):
     def setUp(self):
         self.person = make_person()
         self.org = Party.objects.create(
-            party_type=Party.PartyType.COMPANY, is_active=True
+            party_type=Party.PartyType.ORGANIZATION, is_active=True
         )
         self.rel = PartyRelationship.objects.create(
             from_party=self.person.party,
@@ -704,7 +704,7 @@ class UpdateOrganizationRelationshipTest(TestCase):
     def setUp(self):
         self.person = make_person()
         self.org = Party.objects.create(
-            party_type=Party.PartyType.COMPANY, is_active=True
+            party_type=Party.PartyType.ORGANIZATION, is_active=True
         )
         self.rel = PartyRelationship.objects.create(
             from_party=self.person.party,
@@ -879,7 +879,7 @@ class CreateNoteEdgeCaseTest(TestCase):
 class LinkOrganizationEdgeCaseTest(TestCase):
     def setUp(self):
         self.org_party = Party.objects.create(
-            party_type=Party.PartyType.COMPANY, is_active=True
+            party_type=Party.PartyType.ORGANIZATION, is_active=True
         )
 
     def test_raises_if_person_inactive(self):

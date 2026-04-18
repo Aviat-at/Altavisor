@@ -77,8 +77,8 @@ class CreatePartyTest(TestCase):
         self.assertTrue(party.is_active)
 
     def test_creates_company_party(self):
-        party = create_party(party_type=Party.PartyType.COMPANY)
-        self.assertEqual(party.party_type, "company")
+        party = create_party(party_type=Party.PartyType.ORGANIZATION)
+        self.assertEqual(party.party_type, "organization")
 
     def test_inactive_party(self):
         party = create_party(party_type=Party.PartyType.PERSON, is_active=False)
@@ -105,7 +105,7 @@ class DeactivatePartyTest(TestCase):
 
     def test_closes_active_relationships_as_member(self):
         party = make_party()
-        org = make_party(party_type=Party.PartyType.COMPANY)
+        org = make_party(party_type=Party.PartyType.ORGANIZATION)
         rel = PartyRelationship.objects.create(
             from_party=party, to_party=org, role="contact"
         )
@@ -492,7 +492,7 @@ class CreatePartyNoteTest(TestCase):
 class LinkPartiesTest(TestCase):
     def setUp(self):
         self.from_party = make_party(party_type=Party.PartyType.PERSON)
-        self.to_party = make_party(party_type=Party.PartyType.COMPANY)
+        self.to_party = make_party(party_type=Party.PartyType.ORGANIZATION)
 
     def test_creates_relationship(self):
         rel = link_parties(
@@ -573,7 +573,7 @@ class LinkPartiesTest(TestCase):
 class UpdatePartyRelationshipTest(TestCase):
     def setUp(self):
         self.from_party = make_party()
-        self.to_party = make_party(party_type=Party.PartyType.COMPANY)
+        self.to_party = make_party(party_type=Party.PartyType.ORGANIZATION)
         self.rel = PartyRelationship.objects.create(
             from_party=self.from_party,
             to_party=self.to_party,
@@ -602,7 +602,7 @@ class UpdatePartyRelationshipTest(TestCase):
 class ClosePartyRelationshipTest(TestCase):
     def setUp(self):
         self.from_party = make_party()
-        self.to_party = make_party(party_type=Party.PartyType.COMPANY)
+        self.to_party = make_party(party_type=Party.PartyType.ORGANIZATION)
         self.rel = PartyRelationship.objects.create(
             from_party=self.from_party,
             to_party=self.to_party,

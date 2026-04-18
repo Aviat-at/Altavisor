@@ -21,7 +21,7 @@ class TimestampedModel(models.Model):
 
 class Party(TimestampedModel):
     """
-    Root identity record shared by all entity types (Person, Company, etc.).
+    Root identity record shared by all entity types (Person, Organization, etc.).
 
     party_type drives the OneToOne link to the concrete entity table.
     created_by is nullable so parties can be created programmatically without
@@ -29,8 +29,8 @@ class Party(TimestampedModel):
     """
 
     class PartyType(models.TextChoices):
-        PERSON  = "person",  "Person"
-        COMPANY = "company", "Company"
+        PERSON       = "person",       "Person"
+        ORGANIZATION = "organization", "Organization"
 
     party_type = models.CharField(
         max_length=20,

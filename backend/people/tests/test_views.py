@@ -590,7 +590,7 @@ class PersonOrgRelationViewTest(TestCase):
         self.client.force_authenticate(user=self.user)
         self.person = make_person()
         self.org_party = Party.objects.create(
-            party_type=Party.PartyType.COMPANY, is_active=True
+            party_type=Party.PartyType.ORGANIZATION, is_active=True
         )
         self.org_payload = {
             "to_party_id": self.org_party.id,
@@ -675,7 +675,7 @@ class PersonOrgRelationViewTest(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_list_active_only_param(self):
-        org2 = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
+        org2 = Party.objects.create(party_type=Party.PartyType.ORGANIZATION, is_active=True)
         PartyRelationship.objects.create(
             from_party=self.person.party,
             to_party=self.org_party,

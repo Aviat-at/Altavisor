@@ -96,7 +96,7 @@ def persons_list_create(request):
                 )
 
         is_active_param = request.query_params.get("is_active")
-        is_active_filter = None if is_active_param is None else is_active_param.lower() == "true"
+        is_active_filter = True if is_active_param is None else is_active_param.lower() == "true"
         result = selectors.list_persons(
             is_active=is_active_filter,
             search=request.query_params.get("search", "").strip(),
@@ -443,7 +443,7 @@ def person_addresses(request, person_id):
             data=dict(serializer.validated_data),
             created_by=request.user,
         )
-    except PersonNotFoundError:
+    except (PersonNotFoundError, PersonInactiveError):
         return _not_found(f"Person {person_id} not found.")
 
     return Response(PersonAddressSerializer(address).data, status=status.HTTP_201_CREATED)
@@ -493,7 +493,7 @@ def person_notes(request, person_id):
             body=serializer.validated_data["body"],
             author=request.user,
         )
-    except PersonNotFoundError:
+    except (PersonNotFoundError, PersonInactiveError):
         return _not_found(f"Person {person_id} not found.")
     except ValueError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

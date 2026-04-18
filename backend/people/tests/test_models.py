@@ -197,7 +197,7 @@ class PartyRelationshipModelTest(TestCase):
     def setUp(self):
         self.person = make_person()
         self.org_party = Party.objects.create(
-            party_type=Party.PartyType.COMPANY, is_active=True
+            party_type=Party.PartyType.ORGANIZATION, is_active=True
         )
 
     def test_str(self):

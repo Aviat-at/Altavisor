@@ -51,9 +51,9 @@ class PartyModelTest(TestCase):
 
     def test_party_type_choices(self):
         person = make_party(party_type=Party.PartyType.PERSON)
-        company = make_party(party_type=Party.PartyType.COMPANY)
+        company = make_party(party_type=Party.PartyType.ORGANIZATION)
         self.assertEqual(person.party_type, "person")
-        self.assertEqual(company.party_type, "company")
+        self.assertEqual(company.party_type, "organization")
 
 
 # ─── PartyCategory ─────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ class PartyNoteModelTest(TestCase):
 class PartyRelationshipModelTest(TestCase):
     def setUp(self):
         self.from_party = make_party(party_type=Party.PartyType.PERSON)
-        self.to_party = make_party(party_type=Party.PartyType.COMPANY)
+        self.to_party = make_party(party_type=Party.PartyType.ORGANIZATION)
 
     def test_str(self):
         rel = PartyRelationship.objects.create(

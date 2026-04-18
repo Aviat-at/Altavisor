@@ -368,8 +368,8 @@ class GetPersonNotesTest(TestCase):
 class GetPersonOrganizationsTest(TestCase):
     def setUp(self):
         self.person = make_person()
-        self.org1 = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
-        self.org2 = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
+        self.org1 = Party.objects.create(party_type=Party.PartyType.ORGANIZATION, is_active=True)
+        self.org2 = Party.objects.create(party_type=Party.PartyType.ORGANIZATION, is_active=True)
 
     def test_returns_all_by_default(self):
         PartyRelationship.objects.create(

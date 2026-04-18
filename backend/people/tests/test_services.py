@@ -8,6 +8,13 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 
+from party.models import (
+    Party,
+    PartyAddress,
+    PartyCategory,
+    PartyCategoryAssignment,
+    PartyRelationship,
+)
 from people.exceptions import (
     AddressNotFoundError,
     CategoryInactiveError,
@@ -21,14 +28,7 @@ from people.exceptions import (
     PersonInactiveError,
     PersonNotFoundError,
 )
-from people.models import (
-    OrganizationPersonRelation,
-    Person,
-    PersonAddress,
-    PersonCategory,
-    PersonCategoryAssignment,
-    PersonNote,
-)
+from people.models import Person
 from people.services import (
     assign_category,
     close_organization_relationship,
@@ -60,15 +60,22 @@ def make_user(**kwargs) -> User:
 
 
 def make_person(**kwargs) -> Person:
+    is_active = kwargs.pop("is_active", True)
+    created_by = kwargs.pop("created_by", None)
     defaults = {"first_name": "Alice", "last_name": "Smith"}
     defaults.update(kwargs)
-    return Person.objects.create(**defaults)
+    party = Party.objects.create(
+        party_type=Party.PartyType.PERSON,
+        is_active=is_active,
+        created_by=created_by,
+    )
+    return Person.objects.create(party=party, **defaults)
 
 
-def make_category(**kwargs) -> PersonCategory:
+def make_category(**kwargs) -> PartyCategory:
     defaults = {"name": "Customer", "slug": "customer"}
     defaults.update(kwargs)
-    return PersonCategory.objects.create(**defaults)
+    return PartyCategory.objects.create(**defaults)
 
 
 # ─── detect_duplicate_persons ─────────────────────────────────────────────────
@@ -138,7 +145,7 @@ class CreatePersonTest(TestCase):
     def test_creates_successfully(self):
         person = create_person(data={"first_name": "Alice", "last_name": "Smith"})
         self.assertEqual(person.full_name, "Alice Smith")
-        self.assertTrue(person.is_active)
+        self.assertTrue(person.party.is_active)
 
     def test_sets_created_by(self):
         user = make_user()
@@ -146,7 +153,7 @@ class CreatePersonTest(TestCase):
             data={"first_name": "Bob", "last_name": "Jones", "force": True},
             created_by=user,
         )
-        self.assertEqual(person.created_by, user)
+        self.assertEqual(person.party.created_by, user)
 
     def test_email_stored_as_none_when_blank(self):
         person = create_person(
@@ -179,7 +186,6 @@ class CreatePersonTest(TestCase):
         self.assertEqual(person.full_name, "Alice Smith")
 
     def test_force_consumed_and_not_stored(self):
-        # 'force' is a transient flag, not a model field
         person = create_person(
             data={"first_name": "Test", "last_name": "User", "force": True}
         )
@@ -211,15 +217,14 @@ class UpdatePersonTest(TestCase):
             update_person(person_id=99999, data={"first_name": "x", "force": True})
 
     def test_raises_if_person_inactive(self):
-        self.person.is_active = False
-        self.person.save()
+        self.person.party.is_active = False
+        self.person.party.save()
         with self.assertRaises(PersonInactiveError):
             update_person(
                 person_id=self.person.id, data={"first_name": "x", "force": True}
             )
 
     def test_duplicate_check_excludes_self(self):
-        # Updating a person with its own name/email should not raise
         self.person.email = "alice@example.com"
         self.person.save()
         updated = update_person(
@@ -247,42 +252,40 @@ class DeactivatePersonTest(TestCase):
 
     def test_sets_is_active_false(self):
         deactivate_person(person_id=self.person.id)
-        self.person.refresh_from_db()
-        self.assertFalse(self.person.is_active)
+        party = Party.objects.get(id=self.person.party_id)
+        self.assertFalse(party.is_active)
 
     def test_closes_active_org_relations(self):
-        OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=None,
             role="contact",
         )
         deactivate_person(person_id=self.person.id)
         self.assertFalse(
-            OrganizationPersonRelation.objects.filter(
-                person=self.person, is_active=True
+            PartyRelationship.objects.filter(
+                from_party=self.person.party, is_active=True
             ).exists()
         )
 
     def test_closed_org_relation_gets_ended_on(self):
-        OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=None,
             role="contact",
         )
         deactivate_person(person_id=self.person.id)
-        rel = OrganizationPersonRelation.objects.get(person=self.person)
+        rel = PartyRelationship.objects.get(from_party=self.person.party)
         self.assertIsNotNone(rel.ended_on)
         self.assertEqual(rel.ended_on, timezone.now().date())
 
     def test_deactivates_active_category_assignments(self):
         cat = make_category()
-        PersonCategoryAssignment.objects.create(person=self.person, category=cat)
+        PartyCategoryAssignment.objects.create(party=self.person.party, category=cat)
         deactivate_person(person_id=self.person.id)
         self.assertFalse(
-            PersonCategoryAssignment.objects.filter(
-                person=self.person, is_active=True
+            PartyCategoryAssignment.objects.filter(
+                party=self.person.party, is_active=True
             ).exists()
         )
 
@@ -291,23 +294,22 @@ class DeactivatePersonTest(TestCase):
             deactivate_person(person_id=99999)
 
     def test_raises_if_already_inactive(self):
-        self.person.is_active = False
-        self.person.save()
+        self.person.party.is_active = False
+        self.person.party.save()
         with self.assertRaises(PersonInactiveError):
             deactivate_person(person_id=self.person.id)
 
     def test_does_not_affect_already_closed_org_relations(self):
-        rel = OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        org = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
+        rel = PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=org,
             role="contact",
             is_active=False,
             ended_on=timezone.now().date(),
         )
         deactivate_person(person_id=self.person.id)
         rel.refresh_from_db()
-        # Should be unchanged
         self.assertFalse(rel.is_active)
 
 
@@ -392,10 +394,10 @@ class DeactivateCategoryTest(TestCase):
     def test_deactivates_active_assignments(self):
         person = make_person()
         cat = make_category()
-        PersonCategoryAssignment.objects.create(person=person, category=cat)
+        PartyCategoryAssignment.objects.create(party=person.party, category=cat)
         deactivate_category(category_id=cat.id)
         self.assertFalse(
-            PersonCategoryAssignment.objects.filter(
+            PartyCategoryAssignment.objects.filter(
                 category=cat, is_active=True
             ).exists()
         )
@@ -429,7 +431,7 @@ class AssignCategoryTest(TestCase):
             person_id=self.person.id, category_id=self.category.id
         )
         self.assertTrue(assignment.is_active)
-        self.assertEqual(assignment.person, self.person)
+        self.assertEqual(assignment.party, self.person.party)
         self.assertEqual(assignment.category, self.category)
 
     def test_raises_on_duplicate_active_assignment(self):
@@ -448,7 +450,6 @@ class AssignCategoryTest(TestCase):
             person_id=self.person.id, category_id=self.category.id
         )
         self.assertTrue(reactivated.is_active)
-        # Should be same DB row, not a new one
         self.assertEqual(reactivated.id, assignment.id)
 
     def test_raises_if_person_not_found(self):
@@ -456,9 +457,9 @@ class AssignCategoryTest(TestCase):
             assign_category(person_id=99999, category_id=self.category.id)
 
     def test_raises_if_person_inactive(self):
-        self.person.is_active = False
-        self.person.save()
-        with self.assertRaises(PersonNotFoundError):
+        self.person.party.is_active = False
+        self.person.party.save()
+        with self.assertRaises(PersonInactiveError):
             assign_category(person_id=self.person.id, category_id=self.category.id)
 
     def test_raises_if_category_not_found(self):
@@ -492,8 +493,8 @@ class RemoveCategoryTest(TestCase):
         assign_category(person_id=self.person.id, category_id=self.category.id)
         remove_category(person_id=self.person.id, category_id=self.category.id)
         self.assertFalse(
-            PersonCategoryAssignment.objects.filter(
-                person=self.person,
+            PartyCategoryAssignment.objects.filter(
+                party=self.person.party,
                 category=self.category,
                 is_active=True,
             ).exists()
@@ -516,7 +517,7 @@ class CreateAddressTest(TestCase):
             data={"line1": "1 Main St", "city": "London", "country": "UK"},
         )
         self.assertEqual(addr.city, "London")
-        self.assertEqual(addr.person, self.person)
+        self.assertEqual(addr.party, self.person.party)
 
     def test_new_default_demotes_existing_default(self):
         first = create_address(
@@ -545,8 +546,8 @@ class CreateAddressTest(TestCase):
 class UpdateAddressTest(TestCase):
     def setUp(self):
         self.person = make_person()
-        self.address = PersonAddress.objects.create(
-            person=self.person, line1="1 St", city="London", country="UK"
+        self.address = PartyAddress.objects.create(
+            party=self.person.party, line1="1 St", city="London", country="UK"
         )
 
     def test_updates_city(self):
@@ -558,8 +559,8 @@ class UpdateAddressTest(TestCase):
         self.assertEqual(updated.city, "Birmingham")
 
     def test_setting_default_demotes_existing(self):
-        existing_default = PersonAddress.objects.create(
-            person=self.person,
+        existing_default = PartyAddress.objects.create(
+            party=self.person.party,
             line1="Default St",
             city="City",
             country="UK",
@@ -591,7 +592,7 @@ class CreateNoteTest(TestCase):
     def test_creates_note(self):
         note = create_note(person_id=self.person.id, body="Important note.")
         self.assertEqual(note.body, "Important note.")
-        self.assertEqual(note.person, self.person)
+        self.assertEqual(note.party, self.person.party)
 
     def test_strips_whitespace(self):
         note = create_note(person_id=self.person.id, body="  Note with spaces.  ")
@@ -620,10 +621,12 @@ class CreateNoteTest(TestCase):
 class LinkPersonToOrganizationTest(TestCase):
     def setUp(self):
         self.person = make_person()
+        self.org_party = Party.objects.create(
+            party_type=Party.PartyType.COMPANY, is_active=True
+        )
         self.org_data = {
-            "person_id": None,  # set per-test
-            "organization_id": 1,
-            "organization_type": "customer",
+            "person_id": None,
+            "to_party_id": self.org_party.id,
             "role": "contact",
         }
 
@@ -635,7 +638,7 @@ class LinkPersonToOrganizationTest(TestCase):
     def test_creates_relation(self):
         rel = self._link()
         self.assertTrue(rel.is_active)
-        self.assertEqual(rel.person, self.person)
+        self.assertEqual(rel.from_party, self.person.party)
 
     def test_raises_on_duplicate_active_relation(self):
         self._link()
@@ -647,9 +650,10 @@ class LinkPersonToOrganizationTest(TestCase):
         rel2 = self._link(role="billing")
         self.assertTrue(rel2.is_active)
 
-    def test_different_org_type_is_allowed(self):
-        self._link(organization_type="customer")
-        rel2 = self._link(organization_type="supplier")
+    def test_different_to_party_is_allowed(self):
+        self._link()
+        org2 = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
+        rel2 = self._link(to_party_id=org2.id)
         self.assertTrue(rel2.is_active)
 
     def test_raises_if_person_not_found(self):
@@ -664,10 +668,12 @@ class LinkPersonToOrganizationTest(TestCase):
 class CloseOrganizationRelationshipTest(TestCase):
     def setUp(self):
         self.person = make_person()
-        self.rel = OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        self.org = Party.objects.create(
+            party_type=Party.PartyType.COMPANY, is_active=True
+        )
+        self.rel = PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org,
             role="contact",
         )
 
@@ -697,10 +703,12 @@ class CloseOrganizationRelationshipTest(TestCase):
 class UpdateOrganizationRelationshipTest(TestCase):
     def setUp(self):
         self.person = make_person()
-        self.rel = OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        self.org = Party.objects.create(
+            party_type=Party.PartyType.COMPANY, is_active=True
+        )
+        self.rel = PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org,
             role="contact",
         )
 
@@ -735,7 +743,6 @@ class DetectDuplicatePersonsMobileTest(TestCase):
         self.assertEqual(result[0]["reason"], "phone_match")
 
     def test_detects_phone_field_match_via_phone_param(self):
-        # phone stored in phone column is matched when same value is passed as phone param
         make_person(first_name="Dan", last_name="Brown", phone="01111222233")
         result = detect_duplicate_persons(
             first_name="Different", last_name="Name", phone="01111222233"
@@ -808,7 +815,7 @@ class UpdatePersonEdgeCaseTest(TestCase):
 class CreateAddressEdgeCaseTest(TestCase):
     def test_raises_if_person_inactive(self):
         person = make_person(is_active=False)
-        with self.assertRaises(PersonNotFoundError):
+        with self.assertRaises(PersonInactiveError):
             create_address(
                 person_id=person.id,
                 data={"line1": "1 St", "city": "London", "country": "UK"},
@@ -820,8 +827,7 @@ class CreateAddressEdgeCaseTest(TestCase):
             person_id=person.id,
             data={"line1": "1 St", "city": "London", "country": "UK"},
         )
-        from people.models import PersonAddress
-        self.assertEqual(addr.label, PersonAddress.Label.HOME)
+        self.assertEqual(addr.label, PartyAddress.Label.HOME)
 
     def test_non_default_address_does_not_affect_existing_default(self):
         person = make_person()
@@ -840,14 +846,12 @@ class CreateAddressEdgeCaseTest(TestCase):
 class UpdateAddressEdgeCaseTest(TestCase):
     def setUp(self):
         self.person = make_person()
-        from people.models import PersonAddress
-        self.addr = PersonAddress.objects.create(
-            person=self.person, line1="1 St", city="London", country="UK", is_default=True
+        self.addr = PartyAddress.objects.create(
+            party=self.person.party, line1="1 St", city="London", country="UK",
+            is_default=True
         )
 
     def test_setting_already_default_does_not_raise(self):
-        # Updating is_default=True on an address already default is a no-op demotion
-        from people.models import PersonAddress
         updated = update_address(
             person_id=self.person.id,
             address_id=self.addr.id,
@@ -868,19 +872,23 @@ class UpdateAddressEdgeCaseTest(TestCase):
 class CreateNoteEdgeCaseTest(TestCase):
     def test_raises_if_person_inactive(self):
         person = make_person(is_active=False)
-        with self.assertRaises(PersonNotFoundError):
+        with self.assertRaises(PersonInactiveError):
             create_note(person_id=person.id, body="Some note.")
 
 
 class LinkOrganizationEdgeCaseTest(TestCase):
+    def setUp(self):
+        self.org_party = Party.objects.create(
+            party_type=Party.PartyType.COMPANY, is_active=True
+        )
+
     def test_raises_if_person_inactive(self):
         person = make_person(is_active=False)
-        with self.assertRaises(PersonNotFoundError):
+        with self.assertRaises(PersonInactiveError):
             link_person_to_organization(
                 data={
                     "person_id": person.id,
-                    "organization_id": 1,
-                    "organization_type": "customer",
+                    "to_party_id": self.org_party.id,
                     "role": "contact",
                 }
             )
@@ -892,8 +900,7 @@ class LinkOrganizationEdgeCaseTest(TestCase):
         rel = link_person_to_organization(
             data={
                 "person_id": person.id,
-                "organization_id": 5,
-                "organization_type": "supplier",
+                "to_party_id": self.org_party.id,
                 "role": "rep",
                 "started_on": today,
             }
@@ -905,8 +912,7 @@ class LinkOrganizationEdgeCaseTest(TestCase):
         rel = link_person_to_organization(
             data={
                 "person_id": person.id,
-                "organization_id": 7,
-                "organization_type": "partner",
+                "to_party_id": self.org_party.id,
                 "role": "manager",
                 "is_primary": True,
             }
@@ -916,7 +922,6 @@ class LinkOrganizationEdgeCaseTest(TestCase):
 
 class AssignCategoryEdgeCaseTest(TestCase):
     def test_reactivated_assignment_updates_assigned_by(self):
-        from django.contrib.auth import get_user_model
         UserModel = get_user_model()
         person = make_person()
         category = make_category()

@@ -6,15 +6,16 @@ apply the right filters, and attach the expected prefetched data.
 """
 from django.test import TestCase
 
-from people.exceptions import CategoryNotFoundError, PersonNotFoundError
-from people.models import (
-    OrganizationPersonRelation,
-    Person,
-    PersonAddress,
-    PersonCategory,
-    PersonCategoryAssignment,
-    PersonNote,
+from party.models import (
+    Party,
+    PartyAddress,
+    PartyCategory,
+    PartyCategoryAssignment,
+    PartyNote,
+    PartyRelationship,
 )
+from people.exceptions import CategoryNotFoundError, PersonNotFoundError
+from people.models import Person
 from people.selectors import (
     get_active_person_categories,
     get_category,
@@ -32,15 +33,20 @@ from people.selectors import (
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def make_person(**kwargs) -> Person:
+    is_active = kwargs.pop("is_active", True)
     defaults = {"first_name": "Alice", "last_name": "Smith"}
     defaults.update(kwargs)
-    return Person.objects.create(**defaults)
+    party = Party.objects.create(
+        party_type=Party.PartyType.PERSON,
+        is_active=is_active,
+    )
+    return Person.objects.create(party=party, **defaults)
 
 
-def make_category(**kwargs) -> PersonCategory:
+def make_category(**kwargs) -> PartyCategory:
     defaults = {"name": "Customer", "slug": "customer"}
     defaults.update(kwargs)
-    return PersonCategory.objects.create(**defaults)
+    return PartyCategory.objects.create(**defaults)
 
 
 # ─── list_persons ──────────────────────────────────────────────────────────────
@@ -57,7 +63,7 @@ class ListPersonsTest(TestCase):
         make_person(first_name="Inactive", last_name="Person", is_active=False)
         result = list_persons(is_active=False)
         self.assertEqual(result["count"], 1)
-        self.assertFalse(result["results"][0].is_active)
+        self.assertFalse(result["results"][0].party.is_active)
 
     def test_search_by_first_name(self):
         make_person(first_name="Alice", last_name="Smith")
@@ -83,7 +89,7 @@ class ListPersonsTest(TestCase):
         p1 = make_person()
         make_person(first_name="Bob", last_name="Jones", email="bob@test.com")
         cat = make_category()
-        PersonCategoryAssignment.objects.create(person=p1, category=cat)
+        PartyCategoryAssignment.objects.create(party=p1.party, category=cat)
         result = list_persons(category_id=cat.id)
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["results"][0].id, p1.id)
@@ -110,21 +116,22 @@ class ListPersonsTest(TestCase):
     def test_active_assignments_prefetched(self):
         person = make_person()
         cat = make_category()
-        PersonCategoryAssignment.objects.create(person=person, category=cat)
+        PartyCategoryAssignment.objects.create(party=person.party, category=cat)
         result = list_persons()
         p = result["results"][0]
-        self.assertTrue(hasattr(p, "active_assignments"))
-        self.assertEqual(len(p.active_assignments), 1)
+        # active_assignments is set as to_attr on party
+        self.assertTrue(hasattr(p.party, "active_assignments"))
+        self.assertEqual(len(p.party.active_assignments), 1)
 
     def test_inactive_assignments_not_in_active_assignments(self):
         person = make_person()
         cat = make_category()
-        PersonCategoryAssignment.objects.create(
-            person=person, category=cat, is_active=False
+        PartyCategoryAssignment.objects.create(
+            party=person.party, category=cat, is_active=False
         )
         result = list_persons()
         p = result["results"][0]
-        self.assertEqual(len(p.active_assignments), 0)
+        self.assertEqual(len(p.party.active_assignments), 0)
 
 
 # ─── get_person_detail ─────────────────────────────────────────────────────────
@@ -142,42 +149,41 @@ class GetPersonDetailTest(TestCase):
     def test_finds_inactive_person(self):
         person = make_person(is_active=False)
         detail = get_person_detail(person_id=person.id)
-        self.assertFalse(detail.is_active)
+        self.assertFalse(detail.party.is_active)
 
     def test_addresses_prefetched(self):
         person = make_person()
-        PersonAddress.objects.create(
-            person=person, line1="1 St", city="London", country="UK"
+        PartyAddress.objects.create(
+            party=person.party, line1="1 St", city="London", country="UK"
         )
         detail = get_person_detail(person_id=person.id)
-        # Should not cause additional queries
-        self.assertEqual(detail.addresses.all().count(), 1)
+        self.assertEqual(len(list(detail.party.addresses.all())), 1)
 
     def test_active_assignments_prefetched_as_to_attr(self):
         person = make_person()
         cat = make_category()
-        PersonCategoryAssignment.objects.create(person=person, category=cat)
+        PartyCategoryAssignment.objects.create(party=person.party, category=cat)
         detail = get_person_detail(person_id=person.id)
-        self.assertTrue(hasattr(detail, "active_assignments"))
-        self.assertEqual(len(detail.active_assignments), 1)
+        self.assertTrue(hasattr(detail.party, "active_assignments"))
+        self.assertEqual(len(detail.party.active_assignments), 1)
 
     def test_only_active_addresses_in_prefetch(self):
         person = make_person()
-        PersonAddress.objects.create(
-            person=person, line1="Active", city="London", country="UK", is_active=True
+        PartyAddress.objects.create(
+            party=person.party, line1="Active", city="London", country="UK", is_active=True
         )
-        PersonAddress.objects.create(
-            person=person, line1="Inactive", city="Leeds", country="UK", is_active=False
+        PartyAddress.objects.create(
+            party=person.party, line1="Inactive", city="Leeds", country="UK", is_active=False
         )
         detail = get_person_detail(person_id=person.id)
-        self.assertEqual(detail.addresses.all().count(), 1)
+        self.assertEqual(len(list(detail.party.addresses.all())), 1)
 
     def test_notes_prefetched(self):
         person = make_person()
-        PersonNote.objects.create(person=person, body="Note 1")
-        PersonNote.objects.create(person=person, body="Note 2")
+        PartyNote.objects.create(party=person.party, body="Note 1")
+        PartyNote.objects.create(party=person.party, body="Note 2")
         detail = get_person_detail(person_id=person.id)
-        self.assertEqual(detail.notes.all().count(), 2)
+        self.assertEqual(len(list(detail.party.notes.all())), 2)
 
 
 # ─── search_persons ────────────────────────────────────────────────────────────
@@ -263,22 +269,22 @@ class GetPersonCategoriesTest(TestCase):
         self.cat = make_category()
 
     def test_returns_active_assignments(self):
-        PersonCategoryAssignment.objects.create(
-            person=self.person, category=self.cat
+        PartyCategoryAssignment.objects.create(
+            party=self.person.party, category=self.cat
         )
         results = list(get_person_categories(person_id=self.person.id))
         self.assertEqual(len(results), 1)
 
     def test_filters_inactive_by_default(self):
-        PersonCategoryAssignment.objects.create(
-            person=self.person, category=self.cat, is_active=False
+        PartyCategoryAssignment.objects.create(
+            party=self.person.party, category=self.cat, is_active=False
         )
         results = list(get_person_categories(person_id=self.person.id))
         self.assertEqual(len(results), 0)
 
     def test_includes_inactive_when_flag_false(self):
-        PersonCategoryAssignment.objects.create(
-            person=self.person, category=self.cat, is_active=False
+        PartyCategoryAssignment.objects.create(
+            party=self.person.party, category=self.cat, is_active=False
         )
         results = list(
             get_person_categories(person_id=self.person.id, active_only=False)
@@ -286,8 +292,8 @@ class GetPersonCategoriesTest(TestCase):
         self.assertEqual(len(results), 1)
 
     def test_get_active_person_categories_wrapper(self):
-        PersonCategoryAssignment.objects.create(
-            person=self.person, category=self.cat
+        PartyCategoryAssignment.objects.create(
+            party=self.person.party, category=self.cat
         )
         results = list(get_active_person_categories(person_id=self.person.id))
         self.assertEqual(len(results), 1)
@@ -300,11 +306,11 @@ class GetPersonAddressesTest(TestCase):
         self.person = make_person()
 
     def test_returns_active_addresses_by_default(self):
-        PersonAddress.objects.create(
-            person=self.person, line1="1 St", city="London", country="UK"
+        PartyAddress.objects.create(
+            party=self.person.party, line1="1 St", city="London", country="UK"
         )
-        PersonAddress.objects.create(
-            person=self.person,
+        PartyAddress.objects.create(
+            party=self.person.party,
             line1="2 St",
             city="Leeds",
             country="UK",
@@ -315,8 +321,8 @@ class GetPersonAddressesTest(TestCase):
         self.assertEqual(results[0].city, "London")
 
     def test_includes_inactive_when_flag_false(self):
-        PersonAddress.objects.create(
-            person=self.person,
+        PartyAddress.objects.create(
+            party=self.person.party,
             line1="1 St",
             city="City",
             country="UK",
@@ -328,11 +334,13 @@ class GetPersonAddressesTest(TestCase):
         self.assertEqual(len(results), 1)
 
     def test_default_address_ordered_first(self):
-        PersonAddress.objects.create(
-            person=self.person, line1="Non-default", city="A", country="UK", is_default=False
+        PartyAddress.objects.create(
+            party=self.person.party, line1="Non-default", city="A", country="UK",
+            is_default=False
         )
-        PersonAddress.objects.create(
-            person=self.person, line1="Default", city="B", country="UK", is_default=True
+        PartyAddress.objects.create(
+            party=self.person.party, line1="Default", city="B", country="UK",
+            is_default=True
         )
         results = list(get_person_addresses(person_id=self.person.id))
         self.assertTrue(results[0].is_default)
@@ -343,8 +351,8 @@ class GetPersonAddressesTest(TestCase):
 class GetPersonNotesTest(TestCase):
     def test_returns_notes_newest_first(self):
         person = make_person()
-        PersonNote.objects.create(person=person, body="First")
-        PersonNote.objects.create(person=person, body="Second")
+        PartyNote.objects.create(party=person.party, body="First")
+        PartyNote.objects.create(party=person.party, body="Second")
         results = list(get_person_notes(person_id=person.id))
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0].body, "Second")
@@ -360,19 +368,19 @@ class GetPersonNotesTest(TestCase):
 class GetPersonOrganizationsTest(TestCase):
     def setUp(self):
         self.person = make_person()
+        self.org1 = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
+        self.org2 = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
 
     def test_returns_all_by_default(self):
-        OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org1,
             role="contact",
             is_active=True,
         )
-        OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=2,
-            organization_type="supplier",
+        PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org2,
             role="rep",
             is_active=False,
         )
@@ -380,17 +388,15 @@ class GetPersonOrganizationsTest(TestCase):
         self.assertEqual(len(results), 2)
 
     def test_active_only_flag(self):
-        OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org1,
             role="contact",
             is_active=True,
         )
-        OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=2,
-            organization_type="supplier",
+        PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org2,
             role="rep",
             is_active=False,
         )

@@ -9,14 +9,14 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from people.models import (
-    OrganizationPersonRelation,
-    Person,
-    PersonAddress,
-    PersonCategory,
-    PersonCategoryAssignment,
-    PersonNote,
+from party.models import (
+    Party,
+    PartyAddress,
+    PartyCategory,
+    PartyCategoryAssignment,
+    PartyRelationship,
 )
+from people.models import Person
 
 User = get_user_model()
 
@@ -41,15 +41,20 @@ def make_user(**kwargs) -> User:
 
 
 def make_person(**kwargs) -> Person:
+    is_active = kwargs.pop("is_active", True)
     defaults = {"first_name": "Alice", "last_name": "Smith"}
     defaults.update(kwargs)
-    return Person.objects.create(**defaults)
+    party = Party.objects.create(
+        party_type=Party.PartyType.PERSON,
+        is_active=is_active,
+    )
+    return Person.objects.create(party=party, **defaults)
 
 
-def make_category(**kwargs) -> PersonCategory:
+def make_category(**kwargs) -> PartyCategory:
     defaults = {"name": "Customer", "slug": "customer"}
     defaults.update(kwargs)
-    return PersonCategory.objects.create(**defaults)
+    return PartyCategory.objects.create(**defaults)
 
 
 # ─── Person List + Create ──────────────────────────────────────────────────────
@@ -172,8 +177,8 @@ class PersonDetailUpdateViewTest(TestCase):
         self.assertEqual(response.data["preferred_name"], "Ali")
 
     def test_patch_inactive_person_returns_409(self):
-        self.person.is_active = False
-        self.person.save()
+        self.person.party.is_active = False
+        self.person.party.save()
         response = self.client.patch(
             f"/api/people/persons/{self.person.id}/",
             {"first_name": "x", "force": True},
@@ -210,16 +215,16 @@ class PersonDeactivateViewTest(TestCase):
             f"/api/people/persons/{self.person.id}/deactivate/"
         )
         self.assertEqual(response.status_code, 200)
-        self.person.refresh_from_db()
-        self.assertFalse(self.person.is_active)
+        self.person.party.refresh_from_db()
+        self.assertFalse(self.person.party.is_active)
 
     def test_deactivate_not_found_returns_404(self):
         response = self.client.post("/api/people/persons/99999/deactivate/")
         self.assertEqual(response.status_code, 404)
 
     def test_deactivate_already_inactive_returns_409(self):
-        self.person.is_active = False
-        self.person.save()
+        self.person.party.is_active = False
+        self.person.party.save()
         response = self.client.post(
             f"/api/people/persons/{self.person.id}/deactivate/"
         )
@@ -451,8 +456,8 @@ class PersonCategoryAssignmentViewTest(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_remove_category_returns_204(self):
-        PersonCategoryAssignment.objects.create(
-            person=self.person, category=self.category
+        PartyCategoryAssignment.objects.create(
+            party=self.person.party, category=self.category
         )
         response = self.client.delete(
             f"/api/people/persons/{self.person.id}/categories/{self.category.id}/"
@@ -507,8 +512,8 @@ class PersonAddressViewTest(TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_update_address_returns_200(self):
-        address = PersonAddress.objects.create(
-            person=self.person, line1="1 St", city="London", country="UK"
+        address = PartyAddress.objects.create(
+            party=self.person.party, line1="1 St", city="London", country="UK"
         )
         response = self.client.patch(
             f"/api/people/persons/{self.person.id}/addresses/{address.id}/",
@@ -584,9 +589,11 @@ class PersonOrgRelationViewTest(TestCase):
         self.user = make_user()
         self.client.force_authenticate(user=self.user)
         self.person = make_person()
+        self.org_party = Party.objects.create(
+            party_type=Party.PartyType.COMPANY, is_active=True
+        )
         self.org_payload = {
-            "organization_id": 1,
-            "organization_type": "customer",
+            "to_party_id": self.org_party.id,
             "role": "contact",
         }
 
@@ -627,10 +634,9 @@ class PersonOrgRelationViewTest(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_update_org_relation_returns_200(self):
-        rel = OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        rel = PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org_party,
             role="contact",
         )
         response = self.client.patch(
@@ -650,10 +656,9 @@ class PersonOrgRelationViewTest(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_close_org_relation_returns_200(self):
-        rel = OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        rel = PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org_party,
             role="contact",
         )
         response = self.client.post(
@@ -670,17 +675,16 @@ class PersonOrgRelationViewTest(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_list_active_only_param(self):
-        OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=1,
-            organization_type="customer",
+        org2 = Party.objects.create(party_type=Party.PartyType.COMPANY, is_active=True)
+        PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=self.org_party,
             role="contact",
             is_active=True,
         )
-        OrganizationPersonRelation.objects.create(
-            person=self.person,
-            organization_id=2,
-            organization_type="supplier",
+        PartyRelationship.objects.create(
+            from_party=self.person.party,
+            to_party=org2,
             role="rep",
             is_active=False,
         )
@@ -715,10 +719,7 @@ class SubResourceAuthTest(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        # Create a real person so the person_id exists (returns 401 not 404)
-        from django.contrib.auth import get_user_model
-        UserModel = get_user_model()
-        admin = UserModel.objects.create_user(
+        admin = User.objects.create_user(
             email="setup@test.com", password="pass1234!", is_staff=True, is_superuser=True
         )
         auth_client = APIClient()
@@ -787,7 +788,7 @@ class PersonListCategoryFilterTest(TestCase):
         cat = make_category(name="VIP", slug="vip")
         person_vip = make_person(first_name="VIP", last_name="Person", email="vip@test.com")
         make_person(first_name="Regular", last_name="Person", email="reg@test.com")
-        PersonCategoryAssignment.objects.create(person=person_vip, category=cat)
+        PartyCategoryAssignment.objects.create(party=person_vip.party, category=cat)
         response = self.client.get(f"/api/people/persons/?category_id={cat.id}")
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["id"], person_vip.id)

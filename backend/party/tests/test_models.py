@@ -1,8 +1,8 @@
 """
-test_models.py — model-level property and constraint tests.
+test_models.py — model-level property and constraint tests for the party module.
 
-These tests exercise the minimal model behaviour (@property methods,
-__str__, Meta constraints) without going through the service or API layers.
+These tests exercise minimal model behaviour (__str__, Meta constraints,
+defaults) without going through the service or API layers.
 """
 from django.db import IntegrityError
 from django.test import TestCase
@@ -10,12 +10,12 @@ from django.test import TestCase
 from party.models import (
     Party,
     PartyAddress,
+    PartyAttachment,
     PartyCategory,
     PartyCategoryAssignment,
     PartyNote,
     PartyRelationship,
 )
-from people.models import Person
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -26,71 +26,34 @@ def make_party(**kwargs) -> Party:
     return Party.objects.create(**defaults)
 
 
-def make_person(**kwargs) -> Person:
-    """Create a Party + Person pair. Accepts is_active and created_by for the Party."""
-    is_active = kwargs.pop("is_active", True)
-    created_by = kwargs.pop("created_by", None)
-    defaults = {"first_name": "Alice", "last_name": "Smith"}
-    defaults.update(kwargs)
-    party = Party.objects.create(
-        party_type=Party.PartyType.PERSON,
-        is_active=is_active,
-        created_by=created_by,
-    )
-    return Person.objects.create(party=party, **defaults)
-
-
 def make_category(**kwargs) -> PartyCategory:
     defaults = {"name": "Customer", "slug": "customer"}
     defaults.update(kwargs)
     return PartyCategory.objects.create(**defaults)
 
 
-# ─── Person ────────────────────────────────────────────────────────────────────
+# ─── Party ────────────────────────────────────────────────────────────────────
 
-class PersonPropertyTest(TestCase):
-    def test_full_name(self):
-        p = make_person(first_name="John", last_name="Doe")
-        self.assertEqual(p.full_name, "John Doe")
+class PartyModelTest(TestCase):
+    def test_str_contains_id_and_type(self):
+        party = make_party(party_type=Party.PartyType.PERSON)
+        s = str(party)
+        self.assertIn("person", s)
+        self.assertIn(str(party.id), s)
 
-    def test_display_name_uses_preferred_when_set(self):
-        p = make_person(preferred_name="Johnny")
-        self.assertEqual(p.display_name, "Johnny")
+    def test_default_is_active_true(self):
+        party = make_party()
+        self.assertTrue(party.is_active)
 
-    def test_display_name_falls_back_to_full_name(self):
-        p = make_person(first_name="John", last_name="Doe", preferred_name="")
-        self.assertEqual(p.display_name, "John Doe")
+    def test_created_by_nullable(self):
+        party = make_party()
+        self.assertIsNone(party.created_by)
 
-    def test_initials(self):
-        p = make_person(first_name="John", last_name="Doe")
-        self.assertEqual(p.initials, "JD")
-
-    def test_initials_single_letter_parts(self):
-        p = make_person(first_name="A", last_name="B")
-        self.assertEqual(p.initials, "AB")
-
-    def test_str(self):
-        p = make_person(first_name="Jane", last_name="Smith")
-        self.assertEqual(str(p), "Jane Smith")
-
-    def test_default_is_active_via_party(self):
-        p = make_person()
-        self.assertTrue(p.party.is_active)
-
-    def test_email_nullable(self):
-        p = make_person(email=None)
-        self.assertIsNone(p.email)
-
-    def test_email_unique_constraint(self):
-        make_person(first_name="First", email="shared@example.com")
-        with self.assertRaises(IntegrityError):
-            make_person(first_name="Second", last_name="Other", email="shared@example.com")
-
-    def test_email_null_not_unique_constrained(self):
-        # Two persons with no email should both be storable
-        make_person(first_name="First", last_name="A", email=None)
-        make_person(first_name="Second", last_name="B", email=None)
-        self.assertEqual(Person.objects.filter(email__isnull=True).count(), 2)
+    def test_party_type_choices(self):
+        person = make_party(party_type=Party.PartyType.PERSON)
+        company = make_party(party_type=Party.PartyType.COMPANY)
+        self.assertEqual(person.party_type, "person")
+        self.assertEqual(company.party_type, "company")
 
 
 # ─── PartyCategory ─────────────────────────────────────────────────────────────
@@ -123,27 +86,27 @@ class PartyCategoryModelTest(TestCase):
 
 class PartyCategoryAssignmentModelTest(TestCase):
     def setUp(self):
-        self.person = make_person()
+        self.party = make_party()
         self.category = make_category()
 
     def test_str(self):
         assignment = PartyCategoryAssignment.objects.create(
-            party=self.person.party, category=self.category
+            party=self.party, category=self.category
         )
         self.assertIn(self.category.name, str(assignment))
 
     def test_unique_together_constraint(self):
         PartyCategoryAssignment.objects.create(
-            party=self.person.party, category=self.category
+            party=self.party, category=self.category
         )
         with self.assertRaises(IntegrityError):
             PartyCategoryAssignment.objects.create(
-                party=self.person.party, category=self.category
+                party=self.party, category=self.category
             )
 
     def test_default_is_active(self):
         assignment = PartyCategoryAssignment.objects.create(
-            party=self.person.party, category=self.category
+            party=self.party, category=self.category
         )
         self.assertTrue(assignment.is_active)
 
@@ -152,11 +115,11 @@ class PartyCategoryAssignmentModelTest(TestCase):
 
 class PartyAddressModelTest(TestCase):
     def setUp(self):
-        self.person = make_person()
+        self.party = make_party()
 
     def test_str(self):
         addr = PartyAddress.objects.create(
-            party=self.person.party,
+            party=self.party,
             label=PartyAddress.Label.HOME,
             line1="1 Main St",
             city="London",
@@ -166,74 +129,104 @@ class PartyAddressModelTest(TestCase):
 
     def test_default_label_is_home(self):
         addr = PartyAddress.objects.create(
-            party=self.person.party, line1="1 St", city="City", country="UK"
+            party=self.party, line1="1 St", city="City", country="UK"
         )
         self.assertEqual(addr.label, PartyAddress.Label.HOME)
 
     def test_default_is_active(self):
         addr = PartyAddress.objects.create(
-            party=self.person.party, line1="1 St", city="City", country="UK"
+            party=self.party, line1="1 St", city="City", country="UK"
         )
         self.assertTrue(addr.is_active)
+
+    def test_default_is_not_default_address(self):
+        addr = PartyAddress.objects.create(
+            party=self.party, line1="1 St", city="City", country="UK"
+        )
+        self.assertFalse(addr.is_default)
 
 
 # ─── PartyNote ─────────────────────────────────────────────────────────────────
 
 class PartyNoteModelTest(TestCase):
-    def test_str_contains_date(self):
-        person = make_person(first_name="Bob", last_name="Jones")
-        note = PartyNote.objects.create(party=person.party, body="A note.")
-        self.assertIn(str(note.party.id), str(note))
+    def test_str_contains_party_id(self):
+        party = make_party()
+        note = PartyNote.objects.create(party=party, body="A note.")
+        self.assertIn(str(party.id), str(note))
 
     def test_created_at_set_on_create(self):
-        person = make_person()
-        note = PartyNote.objects.create(party=person.party, body="Test.")
+        party = make_party()
+        note = PartyNote.objects.create(party=party, body="Test.")
         self.assertIsNotNone(note.created_at)
+
+    def test_author_nullable(self):
+        party = make_party()
+        note = PartyNote.objects.create(party=party, body="Anonymous note.")
+        self.assertIsNone(note.author)
 
 
 # ─── PartyRelationship ─────────────────────────────────────────────────────────
 
 class PartyRelationshipModelTest(TestCase):
     def setUp(self):
-        self.person = make_person()
-        self.org_party = Party.objects.create(
-            party_type=Party.PartyType.COMPANY, is_active=True
-        )
+        self.from_party = make_party(party_type=Party.PartyType.PERSON)
+        self.to_party = make_party(party_type=Party.PartyType.COMPANY)
 
     def test_str(self):
         rel = PartyRelationship.objects.create(
-            from_party=self.person.party,
-            to_party=self.org_party,
+            from_party=self.from_party,
+            to_party=self.to_party,
             role="contact",
         )
         self.assertIn("contact", str(rel))
 
     def test_unique_together_constraint(self):
         PartyRelationship.objects.create(
-            from_party=self.person.party,
-            to_party=self.org_party,
+            from_party=self.from_party,
+            to_party=self.to_party,
             role="contact",
         )
         with self.assertRaises(IntegrityError):
             PartyRelationship.objects.create(
-                from_party=self.person.party,
-                to_party=self.org_party,
+                from_party=self.from_party,
+                to_party=self.to_party,
                 role="contact",
             )
 
     def test_default_is_active(self):
         rel = PartyRelationship.objects.create(
-            from_party=self.person.party,
-            to_party=self.org_party,
+            from_party=self.from_party,
+            to_party=self.to_party,
             role="rep",
         )
         self.assertTrue(rel.is_active)
 
     def test_to_party_nullable(self):
-        # to_party may be null until the companies app ships
         rel = PartyRelationship.objects.create(
-            from_party=self.person.party,
+            from_party=self.from_party,
             to_party=None,
             role="pending",
         )
         self.assertIsNone(rel.to_party)
+
+    def test_null_to_party_not_unique_constrained(self):
+        # Two NULL to_party rows with same role should both be storable (NULL != NULL)
+        PartyRelationship.objects.create(
+            from_party=self.from_party,
+            to_party=None,
+            role="pending",
+        )
+        rel2 = PartyRelationship.objects.create(
+            from_party=self.from_party,
+            to_party=None,
+            role="pending",
+        )
+        self.assertIsNotNone(rel2.id)
+
+    def test_default_is_not_primary(self):
+        rel = PartyRelationship.objects.create(
+            from_party=self.from_party,
+            to_party=self.to_party,
+            role="analyst",
+        )
+        self.assertFalse(rel.is_primary)

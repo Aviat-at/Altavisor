@@ -3,6 +3,10 @@
  *
  * Field names mirror the Django serializer fields exactly so that API
  * responses can be typed without transformation.
+ *
+ * Address, Note, Category, and Relationship fields are served flat from
+ * the backend — they are Party sub-resources internally but the API
+ * surfaces them as top-level person fields for simplicity.
  */
 
 export interface PersonCategory {
@@ -57,9 +61,8 @@ export interface PersonAttachment {
 
 export interface OrganizationPersonRelation {
   id: number;
-  person_id: number;
-  organization_id: number;
-  organization_type: string;
+  from_party_id: number;
+  to_party_id: number | null;
   role: string;
   is_primary: boolean;
   is_active: boolean;

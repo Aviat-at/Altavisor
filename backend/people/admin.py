@@ -1,90 +1,75 @@
 from django.contrib import admin
 
-from .models import (
-    OrganizationPersonRelation,
-    Person,
-    PersonAddress,
-    PersonAttachment,
-    PersonCategory,
-    PersonCategoryAssignment,
-    PersonNote,
+from party.models import (
+    PartyAddress,
+    PartyAttachment,
+    PartyCategoryAssignment,
+    PartyNote,
+    PartyRelationship,
 )
+
+from .models import Person
 
 
 # ─── Inlines ───────────────────────────────────────────────────────────────────
 
-class PersonCategoryAssignmentInline(admin.TabularInline):
-    model = PersonCategoryAssignment
+class PartyCategoryAssignmentInline(admin.TabularInline):
+    model = PartyCategoryAssignment
     extra = 0
     fields = ("category", "assigned_by", "is_active", "created_at")
     readonly_fields = ("created_at",)
     autocomplete_fields = ("category",)
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(
+            party__person__isnull=False
+        )
 
-class PersonAddressInline(admin.TabularInline):
-    model = PersonAddress
+
+class PartyAddressInline(admin.TabularInline):
+    model = PartyAddress
     extra = 0
     fields = ("label", "line1", "city", "country", "is_default", "is_active")
 
 
-class PersonNoteInline(admin.TabularInline):
-    model = PersonNote
+class PartyNoteInline(admin.TabularInline):
+    model = PartyNote
     extra = 0
     fields = ("body", "author", "created_at")
     readonly_fields = ("created_at",)
 
     def has_change_permission(self, request, obj=None):
-        # Notes are immutable — no editing in admin either
         return False
 
 
-class PersonAttachmentInline(admin.TabularInline):
-    model = PersonAttachment
+class PartyAttachmentInline(admin.TabularInline):
+    model = PartyAttachment
     extra = 0
     fields = ("label", "file", "uploaded_by", "created_at")
     readonly_fields = ("created_at",)
 
 
-class OrganizationPersonRelationInline(admin.TabularInline):
-    model = OrganizationPersonRelation
+class PartyRelationshipInline(admin.TabularInline):
+    model = PartyRelationship
+    fk_name = "from_party"
     extra = 0
-    fields = (
-        "organization_type", "organization_id", "role",
-        "is_primary", "is_active", "started_on", "ended_on",
-    )
+    fields = ("to_party", "role", "is_primary", "is_active", "started_on", "ended_on")
 
 
 # ─── ModelAdmin registrations ──────────────────────────────────────────────────
 
-@admin.register(PersonCategory)
-class PersonCategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "is_system", "is_active", "created_at")
-    list_filter = ("is_system", "is_active")
-    search_fields = ("name", "slug")
-    ordering = ("name",)
-    readonly_fields = ("slug", "created_at", "updated_at")
-
-    def get_readonly_fields(self, request, obj=None):
-        fields = list(super().get_readonly_fields(request, obj))
-        if obj and obj.is_system:
-            # Prevent admin users from changing system category names too
-            fields.extend(["name", "is_system"])
-        return fields
-
-
 @admin.register(Person)
 class PersonAdmin(admin.ModelAdmin):
-    list_display = (
-        "full_name", "email", "phone", "is_active", "created_at"
-    )
-    list_filter = ("is_active", "gender")
+    list_display = ("full_name", "email", "phone", "party_is_active", "created_at")
+    list_filter = ("gender",)
     search_fields = ("first_name", "last_name", "email", "phone", "mobile")
     ordering = ("last_name", "first_name")
-    readonly_fields = ("created_at", "updated_at", "created_by")
+    readonly_fields = ("created_at", "updated_at", "party")
 
     fieldsets = (
         (None, {
             "fields": (
+                "party",
                 "first_name", "last_name", "preferred_name",
                 "email", "phone", "mobile",
             ),
@@ -93,64 +78,17 @@ class PersonAdmin(admin.ModelAdmin):
             "fields": ("date_of_birth", "gender"),
             "classes": ("collapse",),
         }),
-        ("Status & Audit", {
-            "fields": ("is_active", "created_by", "created_at", "updated_at"),
+        ("Audit", {
+            "fields": ("created_at", "updated_at"),
         }),
     )
-
-    inlines = [
-        PersonCategoryAssignmentInline,
-        PersonAddressInline,
-        OrganizationPersonRelationInline,
-        PersonNoteInline,
-        PersonAttachmentInline,
-    ]
 
     def full_name(self, obj):
         return obj.full_name
     full_name.short_description = "Name"
     full_name.admin_order_field = "last_name"
 
-
-@admin.register(PersonCategoryAssignment)
-class PersonCategoryAssignmentAdmin(admin.ModelAdmin):
-    list_display = ("person", "category", "is_active", "assigned_by", "created_at")
-    list_filter = ("is_active", "category")
-    search_fields = ("person__first_name", "person__last_name", "category__name")
-    readonly_fields = ("created_at", "updated_at")
-
-
-@admin.register(PersonAddress)
-class PersonAddressAdmin(admin.ModelAdmin):
-    list_display = ("person", "label", "city", "country", "is_default", "is_active")
-    list_filter = ("label", "is_default", "is_active")
-    search_fields = ("person__first_name", "person__last_name", "city", "country")
-    readonly_fields = ("created_at", "updated_at")
-
-
-@admin.register(PersonNote)
-class PersonNoteAdmin(admin.ModelAdmin):
-    list_display = ("person", "author", "created_at")
-    search_fields = ("person__first_name", "person__last_name", "body")
-    readonly_fields = ("created_at",)
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        # Preserve notes as immutable audit records
-        return False
-
-
-@admin.register(OrganizationPersonRelation)
-class OrganizationPersonRelationAdmin(admin.ModelAdmin):
-    list_display = (
-        "person", "organization_type", "organization_id",
-        "role", "is_primary", "is_active", "started_on", "ended_on",
-    )
-    list_filter = ("organization_type", "is_active", "is_primary")
-    search_fields = (
-        "person__first_name", "person__last_name",
-        "organization_type", "role",
-    )
-    readonly_fields = ("created_at", "updated_at")
+    def party_is_active(self, obj):
+        return obj.party.is_active
+    party_is_active.short_description = "Active"
+    party_is_active.boolean = True

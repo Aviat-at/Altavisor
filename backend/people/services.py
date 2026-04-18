@@ -4,36 +4,49 @@ services.py — application / use-case layer for the people module.
 All business logic, write workflows, and transactional operations live here.
 Views call services; services call models and raise domain exceptions.
 No ORM queries outside of services and selectors.
+
+Shared sub-resource operations (addresses, notes, categories, relationships)
+delegate to party.services — Party is the owner of those resources.
 """
 import logging
 
 from django.db import transaction
-from django.utils import timezone
-from django.utils.text import slugify
+
+import party.services as party_services
+from party.exceptions import (
+    DuplicateCategoryAssignmentError,
+    RelationshipConflictError,
+    RelationshipNotFoundError,
+)
+from party.models import Party, PartyAddress, PartyCategoryAssignment, PartyRelationship
 
 from .exceptions import (
-    AddressNotFoundError,
-    CategoryInactiveError,
-    CategoryNotFoundError,
-    CategorySystemProtectedError,
-    DuplicateCategoryAssignmentError,
     DuplicatePersonError,
     MergePersonError,
-    OrganizationRelationConflictError,
-    OrganizationRelationNotFoundError,
     PersonInactiveError,
     PersonNotFoundError,
 )
-from .models import (
-    OrganizationPersonRelation,
-    Person,
-    PersonAddress,
-    PersonCategory,
-    PersonCategoryAssignment,
-    PersonNote,
-)
+from .models import Person
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Internal Helpers ──────────────────────────────────────────────────────────
+
+def _get_person(person_id: int) -> Person:
+    try:
+        return Person.objects.select_related("party").get(id=person_id)
+    except Person.DoesNotExist:
+        raise PersonNotFoundError(f"Person {person_id} not found.")
+
+
+def _get_active_person(person_id: int) -> Person:
+    person = _get_person(person_id)
+    if not person.party.is_active:
+        raise PersonInactiveError(
+            f"Person {person_id} is inactive. Reactivate the person first."
+        )
+    return person
 
 
 # ─── Duplicate Detection ───────────────────────────────────────────────────────
@@ -73,16 +86,18 @@ def detect_duplicate_persons(
 
     # High confidence: exact email match
     if email and email.strip():
-        for p in Person.objects.filter(email__iexact=email.strip(), is_active=True):
+        for p in Person.objects.select_related("party").filter(
+            email__iexact=email.strip(), party__is_active=True
+        ):
             if p.id not in seen_ids:
                 candidates.append({"person": p, "reason": "email_match"})
                 seen_ids.add(p.id)
 
     # Medium confidence: same full name (case-insensitive)
-    for p in Person.objects.filter(
+    for p in Person.objects.select_related("party").filter(
         first_name__iexact=first_name.strip(),
         last_name__iexact=last_name.strip(),
-        is_active=True,
+        party__is_active=True,
     ):
         if p.id not in seen_ids:
             candidates.append({"person": p, "reason": "name_match"})
@@ -90,9 +105,9 @@ def detect_duplicate_persons(
 
     # Medium confidence: phone or mobile match
     if phone and phone.strip():
-        for p in Person.objects.filter(
+        for p in Person.objects.select_related("party").filter(
             Q(phone=phone.strip()) | Q(mobile=phone.strip()),
-            is_active=True,
+            party__is_active=True,
         ):
             if p.id not in seen_ids:
                 candidates.append({"person": p, "reason": "phone_match"})
@@ -109,12 +124,6 @@ def _check_duplicates_or_raise(
     phone: str,
     exclude_id: int = None,
 ) -> None:
-    """
-    Internal helper. Runs duplicate detection and raises DuplicatePersonError
-    with the candidate list if any duplicates are found.
-
-    exclude_id is used during updates to exclude the person being edited.
-    """
     candidates = detect_duplicate_persons(
         first_name=first_name,
         last_name=last_name,
@@ -138,15 +147,13 @@ def _check_duplicates_or_raise(
 @transaction.atomic
 def create_person(*, data: dict, created_by=None) -> Person:
     """
-    Create a new Person record.
+    Create a new Person record, atomically creating its Party first.
 
     Duplicate detection runs before creation. If likely duplicates exist,
     DuplicatePersonError is raised with the candidate list so the caller
     (view) can surface them to the user.
 
-    Set data["force"] = True to bypass duplicate detection and create anyway.
-    This is the correct pattern for cases where the user has reviewed the
-    candidates and confirmed the new record is intentional.
+    Set data["force"] = True to bypass duplicate detection.
     """
     force = data.pop("force", False)
 
@@ -158,7 +165,14 @@ def create_person(*, data: dict, created_by=None) -> Person:
             phone=data.get("phone", ""),
         )
 
+    party = party_services.create_party(
+        party_type=Party.PartyType.PERSON,
+        created_by=created_by,
+        is_active=True,
+    )
+
     person = Person.objects.create(
+        party=party,
         first_name=data["first_name"].strip(),
         last_name=data["last_name"].strip(),
         preferred_name=data.get("preferred_name", "").strip(),
@@ -168,7 +182,6 @@ def create_person(*, data: dict, created_by=None) -> Person:
         mobile=data.get("mobile", ""),
         date_of_birth=data.get("date_of_birth"),
         gender=data.get("gender", ""),
-        created_by=created_by,
     )
 
     logger.info(
@@ -187,16 +200,17 @@ def update_person(*, person_id: int, data: dict, updated_by=None) -> Person:
 
     select_for_update() prevents a race condition where two concurrent
     updates both pass the duplicate check then both save.
-
-    Re-runs duplicate detection with the post-update values, excluding
-    the record being edited so it does not flag itself.
     """
     try:
-        person = Person.objects.select_for_update().get(id=person_id)
+        person = (
+            Person.objects.select_related("party")
+            .select_for_update()
+            .get(id=person_id)
+        )
     except Person.DoesNotExist:
         raise PersonNotFoundError(f"Person {person_id} not found.")
 
-    if not person.is_active:
+    if not person.party.is_active:
         raise PersonInactiveError(
             f"Cannot update an inactive person (id={person_id}). "
             f"Reactivate the person first."
@@ -224,7 +238,6 @@ def update_person(*, person_id: int, data: dict, updated_by=None) -> Person:
                 value = value.strip() if field in ("first_name", "last_name", "preferred_name") else value
             setattr(person, field, value)
 
-    # Email is nullable unique — handle separately to avoid storing ""
     if "email" in data:
         person.email = data["email"] or None
 
@@ -241,32 +254,24 @@ def update_person(*, person_id: int, data: dict, updated_by=None) -> Person:
 @transaction.atomic
 def deactivate_person(*, person_id: int, deactivated_by=None) -> Person:
     """
-    Soft-deactivate a Person.
+    Soft-deactivate a Person via its Party.
 
-    Also closes all active OrganizationPersonRelations and deactivates all
-    active PersonCategoryAssignments for this person so the person's data
-    remains internally consistent after deactivation.
+    Delegates to party_services.deactivate_party() which also closes all
+    active PartyRelationships and deactivates all active PartyCategoryAssignments.
     """
     try:
-        person = Person.objects.select_for_update().get(id=person_id)
+        person = (
+            Person.objects.select_related("party")
+            .select_for_update()
+            .get(id=person_id)
+        )
     except Person.DoesNotExist:
         raise PersonNotFoundError(f"Person {person_id} not found.")
 
-    if not person.is_active:
+    if not person.party.is_active:
         raise PersonInactiveError(f"Person {person_id} is already inactive.")
 
-    person.is_active = False
-    person.save(update_fields=["is_active", "updated_at"])
-
-    # Close all active org relations
-    OrganizationPersonRelation.objects.filter(
-        person=person, is_active=True
-    ).update(is_active=False, ended_on=timezone.now().date())
-
-    # Deactivate all active category assignments
-    PersonCategoryAssignment.objects.filter(
-        person=person, is_active=True
-    ).update(is_active=False)
+    party_services.deactivate_party(party_id=person.party_id)
 
     logger.info(
         "Person deactivated: id=%s by=%s",
@@ -278,19 +283,20 @@ def deactivate_person(*, person_id: int, deactivated_by=None) -> Person:
 
 @transaction.atomic
 def reactivate_person(*, person_id: int, reactivated_by=None) -> Person:
-    """
-    Reactivate a previously deactivated Person.
-    """
+    """Reactivate a previously deactivated Person via its Party."""
     try:
-        person = Person.objects.select_for_update().get(id=person_id)
+        person = (
+            Person.objects.select_related("party")
+            .select_for_update()
+            .get(id=person_id)
+        )
     except Person.DoesNotExist:
         raise PersonNotFoundError(f"Person {person_id} not found.")
 
-    if person.is_active:
+    if person.party.is_active:
         raise PersonInactiveError(f"Person {person_id} is already active.")
 
-    person.is_active = True
-    person.save(update_fields=["is_active", "updated_at"])
+    party_services.reactivate_party(party_id=person.party_id)
 
     logger.info(
         "Person reactivated: id=%s by=%s",
@@ -311,7 +317,7 @@ def merge_persons(*, source_id: int, target_id: int, merged_by=None) -> None:
          of those modules exist yet.
       2. A policy decision on which record's field values take precedence
          (source or target).
-      3. Deduplication of category assignments and org relations on target
+      3. Deduplication of category assignments and relationships on target
          after re-pointing.
       4. A permanent audit record linking source_id → target_id so that
          historic references can be resolved.
@@ -322,11 +328,11 @@ def merge_persons(*, source_id: int, target_id: int, merged_by=None) -> None:
 
     When implementing:
       @transaction.atomic
-      1. Verify both persons exist and are active.
+      1. Verify both persons exist and their parties are active.
       2. Re-point all downstream FKs (per-module migration list).
       3. Copy addresses / notes / categories not already on target.
       4. Create a MergeAuditRecord(source_id, target_id, merged_by, merged_at).
-      5. Deactivate source person.
+      5. Deactivate source party.
     """
     raise MergePersonError(
         f"Person merge is not yet implemented. "
@@ -337,442 +343,139 @@ def merge_persons(*, source_id: int, target_id: int, merged_by=None) -> None:
 
 # ─── Category Use Cases ────────────────────────────────────────────────────────
 
-def create_category(*, data: dict, created_by=None) -> PersonCategory:
-    """
-    Create a new PersonCategory.
-
-    slug is auto-generated from name via django.utils.text.slugify so the
-    caller never needs to supply it. Uniqueness is validated before creation.
-
-    API-created categories always have is_system=False.
-    System categories are seeded via management commands or data migrations.
-    """
-    name = data["name"].strip()
-    slug = slugify(name)
-
-    if PersonCategory.objects.filter(slug=slug).exists():
-        raise ValueError(
-            f"A category with slug '{slug}' already exists. "
-            f"Choose a different name."
-        )
-
-    if PersonCategory.objects.filter(name__iexact=name).exists():
-        raise ValueError(
-            f"A category named '{name}' already exists."
-        )
-
-    category = PersonCategory.objects.create(
-        name=name,
-        slug=slug,
-        description=data.get("description", "").strip(),
+def create_category(*, data: dict, created_by=None):
+    """Create a new PartyCategory. Delegates to party_services."""
+    return party_services.create_party_category(
+        name=data["name"],
+        description=data.get("description", ""),
         is_system=False,
     )
 
-    logger.info(
-        "PersonCategory created: id=%s slug=%s by=%s",
-        category.id,
-        category.slug,
-        getattr(created_by, "email", created_by),
-    )
-    return category
 
-
-def update_category(
-    *, category_id: int, data: dict, updated_by=None
-) -> PersonCategory:
-    """
-    Update a PersonCategory.
-
-    System categories may not have their name or slug changed because
-    application code may depend on their slug values. Their description
-    field may be updated.
-    """
-    try:
-        category = PersonCategory.objects.get(id=category_id)
-    except PersonCategory.DoesNotExist:
-        raise CategoryNotFoundError(f"Category {category_id} not found.")
-
-    if category.is_system and "name" in data:
-        raise CategorySystemProtectedError(
-            f"System-defined category '{category.name}' cannot be renamed. "
-            f"Its slug is referenced by application code."
-        )
-
-    if "name" in data:
-        new_name = data["name"].strip()
-        new_slug = slugify(new_name)
-
-        if (
-            PersonCategory.objects.filter(slug=new_slug)
-            .exclude(id=category_id)
-            .exists()
-        ):
-            raise ValueError(
-                f"A category with slug '{new_slug}' already exists."
-            )
-
-        category.name = new_name
-        category.slug = new_slug
-
-    if "description" in data:
-        category.description = data["description"].strip() if data["description"] else ""
-
-    category.save()
-
-    logger.info(
-        "PersonCategory updated: id=%s by=%s",
-        category.id,
-        getattr(updated_by, "email", updated_by),
-    )
-    return category
+def update_category(*, category_id: int, data: dict, updated_by=None):
+    """Update a PartyCategory. Delegates to party_services."""
+    return party_services.update_party_category(category_id=category_id, **data)
 
 
 @transaction.atomic
-def deactivate_category(
-    *, category_id: int, deactivated_by=None
-) -> PersonCategory:
-    """
-    Soft-deactivate a PersonCategory.
-
-    Also deactivates all PersonCategoryAssignment rows referencing this
-    category so that persons no longer appear as having this category
-    assigned after it is removed from active use.
-
-    System categories cannot be deactivated.
-    This operation is idempotent — deactivating an already-inactive category
-    returns it unchanged.
-    """
-    try:
-        category = PersonCategory.objects.select_for_update().get(id=category_id)
-    except PersonCategory.DoesNotExist:
-        raise CategoryNotFoundError(f"Category {category_id} not found.")
-
-    if category.is_system:
-        raise CategorySystemProtectedError(
-            f"System-defined category '{category.name}' cannot be deactivated."
-        )
-
-    if not category.is_active:
-        return category  # idempotent
-
-    category.is_active = False
-    category.save(update_fields=["is_active", "updated_at"])
-
-    deactivated_count = PersonCategoryAssignment.objects.filter(
-        category=category, is_active=True
-    ).update(is_active=False)
-
-    logger.info(
-        "PersonCategory deactivated: id=%s assignments_closed=%s by=%s",
-        category.id,
-        deactivated_count,
-        getattr(deactivated_by, "email", deactivated_by),
-    )
-    return category
+def deactivate_category(*, category_id: int, deactivated_by=None):
+    """Soft-deactivate a PartyCategory. Delegates to party_services."""
+    return party_services.deactivate_party_category(category_id=category_id)
 
 
 # ─── Category Assignment Use Cases ────────────────────────────────────────────
 
 @transaction.atomic
-def assign_category(
-    *, person_id: int, category_id: int, assigned_by=None
-) -> PersonCategoryAssignment:
-    """
-    Assign a category to a person.
-
-    If an active assignment already exists, DuplicateCategoryAssignmentError
-    is raised so the caller can surface a clear message.
-
-    If the (person, category) row exists but is_active=False (was previously
-    removed), it is reactivated rather than creating a duplicate DB row —
-    the unique_together constraint requires this.
-    """
-    try:
-        person = Person.objects.get(id=person_id, is_active=True)
-    except Person.DoesNotExist:
-        raise PersonNotFoundError(
-            f"Active person {person_id} not found."
-        )
-
-    try:
-        category = PersonCategory.objects.get(id=category_id)
-    except PersonCategory.DoesNotExist:
-        raise CategoryNotFoundError(f"Category {category_id} not found.")
-
-    if not category.is_active:
-        raise CategoryInactiveError(
-            f"Category '{category.name}' is inactive and cannot be assigned."
-        )
-
-    assignment, created = PersonCategoryAssignment.objects.get_or_create(
-        person=person,
-        category=category,
-        defaults={"assigned_by": assigned_by, "is_active": True},
+def assign_category(*, person_id: int, category_id: int, assigned_by=None):
+    """Assign a PartyCategory to the person's Party."""
+    person = _get_active_person(person_id)
+    return party_services.assign_category_to_party(
+        party_id=person.party_id,
+        category_id=category_id,
+        assigned_by=assigned_by,
     )
 
-    if not created:
-        if assignment.is_active:
-            raise DuplicateCategoryAssignmentError(
-                f"Person {person_id} already has an active assignment "
-                f"for category '{category.name}'."
-            )
-        # Reactivate a previously removed assignment
-        assignment.is_active = True
-        assignment.assigned_by = assigned_by
-        assignment.save(update_fields=["is_active", "assigned_by", "updated_at"])
 
-    logger.info(
-        "Category assigned: person=%s category=%s (created=%s) by=%s",
-        person_id,
-        category_id,
-        created,
-        getattr(assigned_by, "email", assigned_by),
-    )
-    return assignment
-
-
-def remove_category(
-    *, person_id: int, category_id: int, removed_by=None
-) -> None:
-    """
-    Remove (soft-deactivate) a category assignment from a person.
-
-    Raises DuplicateCategoryAssignmentError if there is no active assignment
-    to remove (re-using the exception for "assignment state mismatch").
-    """
-    try:
-        assignment = PersonCategoryAssignment.objects.get(
-            person_id=person_id,
-            category_id=category_id,
-            is_active=True,
-        )
-    except PersonCategoryAssignment.DoesNotExist:
-        raise DuplicateCategoryAssignmentError(
-            f"No active category assignment found for "
-            f"person={person_id}, category={category_id}."
-        )
-
-    assignment.is_active = False
-    assignment.save(update_fields=["is_active", "updated_at"])
-
-    logger.info(
-        "Category removed: person=%s category=%s by=%s",
-        person_id,
-        category_id,
-        getattr(removed_by, "email", removed_by),
+def remove_category(*, person_id: int, category_id: int, removed_by=None) -> None:
+    """Remove (soft-deactivate) a category assignment from the person's Party."""
+    person = _get_person(person_id)
+    party_services.remove_category_from_party(
+        party_id=person.party_id,
+        category_id=category_id,
     )
 
 
 # ─── Address Use Cases ─────────────────────────────────────────────────────────
 
 @transaction.atomic
-def create_address(*, person_id: int, data: dict, created_by=None) -> PersonAddress:
-    """
-    Create a new address for a person.
-
-    If is_default=True, any existing default address for this person is
-    demoted so there is at most one default per person at any time.
-    """
-    try:
-        person = Person.objects.get(id=person_id, is_active=True)
-    except Person.DoesNotExist:
-        raise PersonNotFoundError(f"Active person {person_id} not found.")
-
-    if data.get("is_default"):
-        PersonAddress.objects.filter(
-            person=person, is_default=True
-        ).update(is_default=False)
-
-    address = PersonAddress.objects.create(
-        person=person,
-        label=data.get("label", PersonAddress.Label.HOME),
+def create_address(*, person_id: int, data: dict, created_by=None):
+    """Create a new PartyAddress for the person's Party."""
+    person = _get_active_person(person_id)
+    return party_services.create_party_address(
+        party_id=person.party_id,
+        label=data.get("label", PartyAddress.Label.HOME),
         line1=data["line1"],
-        line2=data.get("line2", ""),
         city=data["city"],
+        country=data["country"],
+        line2=data.get("line2", ""),
         state_province=data.get("state_province", ""),
         postal_code=data.get("postal_code", ""),
-        country=data["country"],
         is_default=data.get("is_default", False),
     )
 
-    return address
-
 
 @transaction.atomic
-def update_address(
-    *, person_id: int, address_id: int, data: dict, updated_by=None
-) -> PersonAddress:
-    """
-    Update an existing active address.
-
-    If is_default is being set to True, any other default address for
-    this person is demoted first.
-    """
-    try:
-        address = PersonAddress.objects.get(
-            id=address_id,
-            person_id=person_id,
-            is_active=True,
-        )
-    except PersonAddress.DoesNotExist:
-        raise AddressNotFoundError(
-            f"Address {address_id} not found for person {person_id}."
-        )
-
-    if data.get("is_default") and not address.is_default:
-        PersonAddress.objects.filter(
-            person_id=person_id, is_default=True
-        ).exclude(id=address_id).update(is_default=False)
-
-    updatable = [
-        "label", "line1", "line2", "city",
-        "state_province", "postal_code", "country", "is_default",
-    ]
-    for field in updatable:
-        if field in data:
-            setattr(address, field, data[field])
-
-    address.save()
-    return address
+def update_address(*, person_id: int, address_id: int, data: dict, updated_by=None):
+    """Update an existing active address on the person's Party."""
+    person = _get_person(person_id)
+    return party_services.update_party_address(
+        party_id=person.party_id,
+        address_id=address_id,
+        **data,
+    )
 
 
 # ─── Note Use Cases ────────────────────────────────────────────────────────────
 
-def create_note(*, person_id: int, body: str, author=None) -> PersonNote:
-    """
-    Append an immutable note to a person.
-
-    Notes cannot be edited or deleted after creation — they are audit records.
-    """
-    try:
-        person = Person.objects.get(id=person_id, is_active=True)
-    except Person.DoesNotExist:
-        raise PersonNotFoundError(f"Active person {person_id} not found.")
-
-    if not body or not body.strip():
-        raise ValueError("Note body cannot be empty.")
-
-    note = PersonNote.objects.create(
-        person=person,
-        body=body.strip(),
+def create_note(*, person_id: int, body: str, author=None):
+    """Append an immutable note to the person's Party."""
+    person = _get_active_person(person_id)
+    return party_services.create_party_note(
+        party_id=person.party_id,
+        body=body,
         author=author,
     )
-    return note
 
 
 # ─── Organization Relation Use Cases ──────────────────────────────────────────
 
 @transaction.atomic
-def link_person_to_organization(
-    *, data: dict, created_by=None
-) -> OrganizationPersonRelation:
+def link_person_to_organization(*, data: dict, created_by=None):
     """
-    Link a person to an organization in a specific role.
+    Link a person's Party to another Party in a specific role.
 
-    Prevents creating a duplicate *active* relation for the same
-    (person, organization_id, organization_type, role) combination.
+    data["to_party_id"] is optional until the companies app ships — pass
+    it as None to create a pending relationship.
 
-    A previously closed relation for the same combination is a different
-    temporal record and does not block creating a new active one — the
-    unique_together constraint is on the four columns, so a second row
-    with the same combination would still violate it. The service raises
-    OrganizationRelationConflictError only when is_active=True already exists,
-    so callers must close the existing relation before re-linking.
+    Replaces the legacy link_person_to_organization(organization_id,
+    organization_type) pattern with Party-to-Party semantics.
     """
     person_id = data["person_id"]
-    organization_id = data["organization_id"]
-    organization_type = data["organization_type"].strip()
-    role = data["role"].strip()
+    person = _get_active_person(person_id)
 
     try:
-        person = Person.objects.get(id=person_id, is_active=True)
-    except Person.DoesNotExist:
-        raise PersonNotFoundError(f"Active person {person_id} not found.")
-
-    active_exists = OrganizationPersonRelation.objects.filter(
-        person=person,
-        organization_id=organization_id,
-        organization_type=organization_type,
-        role=role,
-        is_active=True,
-    ).exists()
-
-    if active_exists:
-        raise OrganizationRelationConflictError(
-            f"An active relation already exists for "
-            f"person={person_id}, {organization_type}#{organization_id}, "
-            f"role='{role}'. Close the existing relation before re-linking."
+        relation = party_services.link_parties(
+            from_party_id=person.party_id,
+            to_party_id=data.get("to_party_id"),
+            role=data["role"].strip(),
+            is_primary=data.get("is_primary", False),
+            started_on=data.get("started_on"),
         )
-
-    relation = OrganizationPersonRelation.objects.create(
-        person=person,
-        organization_id=organization_id,
-        organization_type=organization_type,
-        role=role,
-        is_primary=data.get("is_primary", False),
-        started_on=data.get("started_on"),
-    )
+    except RelationshipConflictError:
+        raise
 
     logger.info(
-        "Org relation created: person=%s %s#%s role=%s by=%s",
+        "Person org relation created: person=%s to_party=%s role=%s by=%s",
         person_id,
-        organization_type,
-        organization_id,
-        role,
+        data.get("to_party_id"),
+        data["role"],
         getattr(created_by, "email", created_by),
     )
     return relation
 
 
-def update_organization_relationship(
-    *, relation_id: int, data: dict, updated_by=None
-) -> OrganizationPersonRelation:
-    """
-    Update mutable fields on an organization-person relation.
-    Only role, is_primary, and started_on may be changed.
-    """
+def update_organization_relationship(*, relation_id: int, data: dict, updated_by=None):
+    """Update mutable fields on a PartyRelationship."""
     try:
-        relation = OrganizationPersonRelation.objects.get(id=relation_id)
-    except OrganizationPersonRelation.DoesNotExist:
-        raise OrganizationRelationNotFoundError(
-            f"Organization relation {relation_id} not found."
+        return party_services.update_party_relationship(
+            relationship_id=relation_id, **data
         )
-
-    for field in ["role", "is_primary", "started_on"]:
-        if field in data:
-            setattr(relation, field, data[field])
-
-    relation.save()
-    return relation
-
-
-def close_organization_relationship(
-    *, relation_id: int, closed_by=None
-) -> OrganizationPersonRelation:
-    """
-    Soft-close an organization-person relation.
-
-    Sets is_active=False and ended_on=today.
-    This operation is idempotent — closing an already-closed relation
-    returns it unchanged without raising.
-    """
-    try:
-        relation = OrganizationPersonRelation.objects.get(id=relation_id)
-    except OrganizationPersonRelation.DoesNotExist:
-        raise OrganizationRelationNotFoundError(
+    except Exception:
+        raise RelationshipNotFoundError(
             f"Organization relation {relation_id} not found."
-        )
+        ) from None
 
-    if not relation.is_active:
-        return relation  # idempotent
 
-    relation.is_active = False
-    relation.ended_on = timezone.now().date()
-    relation.save(update_fields=["is_active", "ended_on", "updated_at"])
-
-    logger.info(
-        "Org relation closed: id=%s by=%s",
-        relation_id,
-        getattr(closed_by, "email", closed_by),
-    )
-    return relation
+def close_organization_relationship(*, relation_id: int, closed_by=None):
+    """Soft-close a PartyRelationship."""
+    return party_services.close_party_relationship(relationship_id=relation_id)

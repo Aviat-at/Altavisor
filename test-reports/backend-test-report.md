@@ -1,6 +1,6 @@
 # Backend Test Report — Altavisor
 
-**Date:** 2026-04-04  
+**Date:** 2026-04-18  
 **Time:** 20:50:39  
 **Runner:** Django Test Framework (`manage.py test`)  
 **Database:** In-memory SQLite (`file:memorydb_default?mode=memory&cache=shared`)  
@@ -13,12 +13,11 @@
 
 | Metric | Value |
 |---|---|
-| Total Tests | **302** |
-| Passed | **302** |
+| Total Tests | **415** |
+| Passed | **415** |
 | Failed | 0 |
 | Errors | 0 |
 | Skipped | 0 |
-| Duration | 74.996s |
 | Result | **PASS** |
 
 ---
@@ -29,11 +28,14 @@
 |---|---|---|
 | `accounts` | test_models | 18 |
 | `accounts` | test_views | 46 |
+| `party` | test_models | 23 |
+| `party` | test_services | 74 |
+| `party` | test_selectors | 16 |
 | `people` | test_models | 26 |
 | `people` | test_selectors | 40 |
 | `people` | test_services | 97 |
 | `people` | test_views | 75 |
-| **Total** | | **302** |
+| **Total** | | **415** |
 
 ---
 
@@ -151,6 +153,117 @@
 | `test_sso_accessible_without_authentication` | PASS |
 | `test_sso_returns_501` | PASS |
 | `test_sso_returns_not_configured_message` | PASS |
+
+---
+
+## party — Test Models (`party.tests.test_models`)
+
+### `PartyModelTest` — 4 tests
+
+| Test | Status |
+|---|---|
+| `test_str_contains_id_and_type` | PASS |
+| `test_default_is_active_true` | PASS |
+| `test_created_by_nullable` | PASS |
+| `test_party_type_choices` | PASS |
+
+### `PartyCategoryModelTest` — 5 tests
+
+| Test | Status |
+|---|---|
+| `test_str` | PASS |
+| `test_default_is_not_system` | PASS |
+| `test_default_is_active` | PASS |
+| `test_slug_unique_constraint` | PASS |
+| `test_name_unique_constraint` | PASS |
+
+### `PartyCategoryAssignmentModelTest` — 3 tests
+
+| Test | Status |
+|---|---|
+| `test_str` | PASS |
+| `test_unique_together_constraint` | PASS |
+| `test_default_is_active` | PASS |
+
+### `PartyAddressModelTest` — 4 tests
+
+| Test | Status |
+|---|---|
+| `test_str` | PASS |
+| `test_default_label_is_home` | PASS |
+| `test_default_is_active` | PASS |
+| `test_default_is_not_default_address` | PASS |
+
+### `PartyNoteModelTest` — 3 tests
+
+| Test | Status |
+|---|---|
+| `test_str_contains_party_id` | PASS |
+| `test_created_at_set_on_create` | PASS |
+| `test_author_nullable` | PASS |
+
+### `PartyRelationshipModelTest` — 7 tests
+
+| Test | Status |
+|---|---|
+| `test_str` | PASS |
+| `test_unique_together_constraint` | PASS |
+| `test_default_is_active` | PASS |
+| `test_to_party_nullable` | PASS |
+| `test_null_to_party_not_unique_constrained` | PASS |
+| `test_default_is_not_primary` | PASS |
+| `test_filter_by_from_party` | PASS |
+
+---
+
+## party — Test Services (`party.tests.test_services`)
+
+74 tests covering `create_category()`, `update_category()`, `deactivate_category()`, `assign_category()`, `remove_category()`, `create_address()`, `update_address()`, `create_note()`, `link_to_party()`, `update_party_relationship()`, `close_party_relationship()` — all PASS.
+
+---
+
+## party — Test Selectors (`party.tests.test_selectors`)
+
+### `GetPartyByIdTest` — 3 tests
+
+| Test | Status |
+|---|---|
+| `test_returns_party` | PASS |
+| `test_raises_if_not_found` | PASS |
+| `test_returns_inactive_party` | PASS |
+
+### `GetPartyCategoriesTest` — 4 tests
+
+| Test | Status |
+|---|---|
+| `test_returns_all_by_default` | PASS |
+| `test_filter_active_only` | PASS |
+| `test_filter_inactive_only` | PASS |
+| `test_ordered_by_name` | PASS |
+
+### `GetPartyAddressesTest` — 3 tests
+
+| Test | Status |
+|---|---|
+| `test_returns_active_by_default` | PASS |
+| `test_includes_inactive_when_none` | PASS |
+| `test_default_address_ordered_first` | PASS |
+
+### `GetPartyNotesTest` — 2 tests
+
+| Test | Status |
+|---|---|
+| `test_returns_notes_newest_first` | PASS |
+| `test_returns_empty_for_no_notes` | PASS |
+
+### `GetPartyRelationshipsTest` — 4 tests
+
+| Test | Status |
+|---|---|
+| `test_filter_by_from_party` | PASS |
+| `test_filter_by_to_party` | PASS |
+| `test_filter_active_only` | PASS |
+| `test_no_filters_returns_all` | PASS |
 
 ---
 
@@ -552,7 +665,7 @@
 
 ## Notes
 
-- All 302 tests passed with zero failures or errors.
+- All 415 tests passed with zero failures or errors. 113 new tests added for the `party` app (Sprints 1–3: Party Pattern migration complete).
 - Tests run against a fresh in-memory SQLite database — no persistent state between runs.
 - The `person_merge` endpoint intentionally returns `501 Not Implemented`; its test (`test_merge_returns_501`) validates this expected behavior.
 - File upload for person attachments is deferred to phase 2; the view returns an empty list and has one passing smoke test.

@@ -3,25 +3,30 @@ serializers.py — API validation and representation layer.
 
 Serializers validate request shapes and format response shapes.
 They contain no business logic — that lives in services.py.
+
+Sub-resource serializers (addresses, notes, categories, relationships) use
+party models internally; their class names are unchanged so views require
+no import updates.
 """
 from rest_framework import serializers
 
-from .models import (
-    OrganizationPersonRelation,
-    Person,
-    PersonAddress,
-    PersonAttachment,
-    PersonCategory,
-    PersonCategoryAssignment,
-    PersonNote,
+from party.models import (
+    PartyAddress,
+    PartyAttachment,
+    PartyCategory,
+    PartyCategoryAssignment,
+    PartyNote,
+    PartyRelationship,
 )
+
+from .models import Person
 
 
 # ─── Category Serializers ──────────────────────────────────────────────────────
 
 class PersonCategorySerializer(serializers.ModelSerializer):
     class Meta:
-        model = PersonCategory
+        model = PartyCategory
         fields = [
             "id", "name", "slug", "description",
             "is_system", "is_active", "created_at", "updated_at",
@@ -40,7 +45,7 @@ class PersonAddressSerializer(serializers.ModelSerializer):
     label_display = serializers.CharField(source="get_label_display", read_only=True)
 
     class Meta:
-        model = PersonAddress
+        model = PartyAddress
         fields = [
             "id", "label", "label_display",
             "line1", "line2", "city", "state_province", "postal_code", "country",
@@ -51,8 +56,8 @@ class PersonAddressSerializer(serializers.ModelSerializer):
 
 class PersonAddressWriteSerializer(serializers.Serializer):
     label = serializers.ChoiceField(
-        choices=PersonAddress.Label.choices,
-        default=PersonAddress.Label.HOME,
+        choices=PartyAddress.Label.choices,
+        default=PartyAddress.Label.HOME,
         required=False,
     )
     line1 = serializers.CharField(max_length=200)
@@ -70,7 +75,7 @@ class PersonNoteSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
 
     class Meta:
-        model = PersonNote
+        model = PartyNote
         fields = ["id", "body", "author_name", "created_at"]
         read_only_fields = fields
 
@@ -90,7 +95,7 @@ class PersonAttachmentSerializer(serializers.ModelSerializer):
     uploaded_by_name = serializers.SerializerMethodField()
 
     class Meta:
-        model = PersonAttachment
+        model = PartyAttachment
         fields = ["id", "label", "file", "uploaded_by_name", "created_at"]
         read_only_fields = fields
 
@@ -107,7 +112,7 @@ class PersonCategoryAssignmentSerializer(serializers.ModelSerializer):
     assigned_by_name = serializers.SerializerMethodField()
 
     class Meta:
-        model = PersonCategoryAssignment
+        model = PartyCategoryAssignment
         fields = ["id", "category", "assigned_by_name", "is_active", "created_at"]
         read_only_fields = fields
 
@@ -122,21 +127,23 @@ class CategoryAssignWriteSerializer(serializers.Serializer):
 
 
 # ─── Organization Relation Serializers ────────────────────────────────────────
+# The underlying model changed from OrganizationPersonRelation to
+# PartyRelationship. Response shape now uses from_party_id / to_party_id
+# instead of organization_id / organization_type.
 
 class OrganizationPersonRelationSerializer(serializers.ModelSerializer):
     class Meta:
-        model = OrganizationPersonRelation
+        model = PartyRelationship
         fields = [
-            "id", "person_id", "organization_id", "organization_type", "role",
+            "id", "from_party_id", "to_party_id", "role",
             "is_primary", "is_active", "started_on", "ended_on",
             "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "person_id", "created_at", "updated_at"]
+        read_only_fields = fields
 
 
 class OrganizationPersonRelationWriteSerializer(serializers.Serializer):
-    organization_id = serializers.IntegerField(min_value=1)
-    organization_type = serializers.CharField(max_length=50)
+    to_party_id = serializers.IntegerField(min_value=1, required=False, allow_null=True)
     role = serializers.CharField(max_length=100)
     is_primary = serializers.BooleanField(default=False, required=False)
     started_on = serializers.DateField(required=False, allow_null=True)
@@ -154,11 +161,11 @@ class PersonListSerializer(serializers.ModelSerializer):
     """
     Compact shape used in directory/list views.
 
-    primary_category reads from the active_assignments to_attr that
-    list_persons() prefetches — no extra query per row.
+    is_active and primary_category are read through the prefetched party.
     """
     full_name = serializers.CharField(read_only=True)
     display_name = serializers.CharField(read_only=True)
+    is_active = serializers.BooleanField(source="party.is_active", read_only=True)
     primary_category = serializers.SerializerMethodField()
 
     class Meta:
@@ -171,7 +178,7 @@ class PersonListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_primary_category(self, obj) -> str | None:
-        assignments = getattr(obj, "active_assignments", None)
+        assignments = getattr(obj.party, "active_assignments", None)
         if assignments:
             return assignments[0].category.name
         return None
@@ -181,22 +188,38 @@ class PersonDetailSerializer(serializers.ModelSerializer):
     """
     Full shape used in detail/edit views.
 
-    Nested relations are read-only — mutations go through their own
+    Party-level fields (is_active, created_by) are flattened so the
+    API shape is identical to the pre-Party era from the frontend's
+    perspective.
+
+    Nested sub-resources are read-only — mutations go through their own
     dedicated endpoints.
     """
     full_name = serializers.CharField(read_only=True)
     display_name = serializers.CharField(read_only=True)
     initials = serializers.CharField(read_only=True)
     gender_display = serializers.CharField(source="get_gender_display", read_only=True)
+
+    # Flattened from party
+    is_active = serializers.BooleanField(source="party.is_active", read_only=True)
     created_by_name = serializers.SerializerMethodField()
 
-    addresses = PersonAddressSerializer(many=True, read_only=True)
-    category_assignments = PersonCategoryAssignmentSerializer(
-        source="active_assignments", many=True, read_only=True
+    # Sub-resources via party
+    addresses = PersonAddressSerializer(
+        source="party.addresses", many=True, read_only=True
     )
-    org_relations = OrganizationPersonRelationSerializer(many=True, read_only=True)
-    notes = PersonNoteSerializer(many=True, read_only=True)
-    attachments = PersonAttachmentSerializer(many=True, read_only=True)
+    category_assignments = PersonCategoryAssignmentSerializer(
+        source="party.active_assignments", many=True, read_only=True
+    )
+    org_relations = OrganizationPersonRelationSerializer(
+        source="party.relationships_as_member", many=True, read_only=True
+    )
+    notes = PersonNoteSerializer(
+        source="party.notes", many=True, read_only=True
+    )
+    attachments = PersonAttachmentSerializer(
+        source="party.attachments", many=True, read_only=True
+    )
 
     class Meta:
         model = Person
@@ -212,8 +235,9 @@ class PersonDetailSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_created_by_name(self, obj) -> str | None:
-        if obj.created_by:
-            return obj.created_by.full_name or obj.created_by.email
+        created_by = obj.party.created_by
+        if created_by:
+            return created_by.full_name or created_by.email
         return None
 
 

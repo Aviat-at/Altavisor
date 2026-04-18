@@ -136,7 +136,7 @@ export default function ProfilePage({ personId }: Props) {
 
   // Org link dialog
   const [orgOpen,      setOrgOpen]      = useState(false);
-  const [orgForm,      setOrgForm]      = useState({ organization_id: "", organization_type: "", role: "", is_primary: false });
+  const [orgForm,      setOrgForm]      = useState({ to_party_id: "", role: "", is_primary: false });
   const [orgErrors,    setOrgErrors]    = useState<Partial<typeof orgForm>>({});
   const [orgSaving,    setOrgSaving]    = useState(false);
   const [orgErr,       setOrgErr]       = useState<string | null>(null);
@@ -311,8 +311,6 @@ export default function ProfilePage({ personId }: Props) {
 
   const submitOrg = async () => {
     const e: Partial<typeof orgForm> = {};
-    if (!orgForm.organization_id.trim()) e.organization_id = "Organisation ID is required.";
-    if (!orgForm.organization_type.trim()) e.organization_type = "Type is required.";
     if (!orgForm.role.trim()) e.role = "Role is required.";
     if (Object.keys(e).length) { setOrgErrors(e as typeof orgErrors); return; }
 
@@ -320,10 +318,9 @@ export default function ProfilePage({ personId }: Props) {
     setOrgErr(null);
     try {
       await api.linkOrganization(personId!, {
-        organization_id:   parseInt(orgForm.organization_id),
-        organization_type: orgForm.organization_type.trim(),
-        role:              orgForm.role.trim(),
-        is_primary:        orgForm.is_primary,
+        to_party_id: orgForm.to_party_id ? parseInt(orgForm.to_party_id) : undefined,
+        role:        orgForm.role.trim(),
+        is_primary:  orgForm.is_primary,
       });
       loadPerson();
       setOrgOpen(false);
@@ -335,7 +332,8 @@ export default function ProfilePage({ personId }: Props) {
   };
 
   const handleCloseOrg = async (rel: OrganizationPersonRelation) => {
-    if (!window.confirm(`Close the ${rel.role} relationship with ${rel.organization_type} #${rel.organization_id}?`)) return;
+    const target = rel.to_party_id != null ? `Party #${rel.to_party_id}` : "pending party";
+    if (!window.confirm(`Close the ${rel.role} relationship with ${target}?`)) return;
     try {
       await api.closeOrgRelation(personId!, rel.id);
       loadPerson();
@@ -760,7 +758,7 @@ export default function ProfilePage({ personId }: Props) {
                     <Button
                       size="small"
                       startIcon={<AddRoundedIcon sx={{ fontSize: "13px !important" }} />}
-                      onClick={() => { setOrgForm({ organization_id: "", organization_type: "", role: "", is_primary: false }); setOrgErrors({}); setOrgErr(null); setOrgOpen(true); }}
+                      onClick={() => { setOrgForm({ to_party_id: "", role: "", is_primary: false }); setOrgErrors({}); setOrgErr(null); setOrgOpen(true); }}
                       sx={{ fontSize: "0.75rem", color: "text.secondary", "&:hover": { color: "text.primary" } }}
                     >
                       Link
@@ -790,7 +788,7 @@ export default function ProfilePage({ personId }: Props) {
                           <Box sx={{ flex: 1 }}>
                             <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
                               <Typography variant="body2" sx={{ fontWeight: 500, fontSize: "0.8rem" }}>
-                                {rel.organization_type} #{rel.organization_id}
+                                {rel.to_party_id != null ? `Party #${rel.to_party_id}` : "Pending"}
                               </Typography>
                               {rel.is_primary && (
                                 <Chip label="Primary" size="small" sx={{ fontSize: "0.62rem", height: 16, bgcolor: "action.selected", color: "primary.main" }} />
@@ -1017,17 +1015,9 @@ export default function ProfilePage({ personId }: Props) {
         <DialogContent sx={{ px: 3, pt: 2.5, pb: 1 }}>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
             <Box>
-              <FieldLabel>Organisation ID *</FieldLabel>
-              <TextField fullWidth size="small" type="number" placeholder="e.g. 42"
-                value={orgForm.organization_id} onChange={(e) => setOrgForm((p) => ({ ...p, organization_id: e.target.value }))}
-                error={!!orgErrors.organization_id} helperText={orgErrors.organization_id}
-              />
-            </Box>
-            <Box>
-              <FieldLabel>Organisation Type *</FieldLabel>
-              <TextField fullWidth size="small" placeholder="e.g. customer, supplier"
-                value={orgForm.organization_type} onChange={(e) => setOrgForm((p) => ({ ...p, organization_type: e.target.value }))}
-                error={!!orgErrors.organization_type} helperText={orgErrors.organization_type}
+              <FieldLabel>Party ID (optional)</FieldLabel>
+              <TextField fullWidth size="small" type="number" placeholder="Leave blank if company not yet in system"
+                value={orgForm.to_party_id} onChange={(e) => setOrgForm((p) => ({ ...p, to_party_id: e.target.value }))}
               />
             </Box>
             <Box>

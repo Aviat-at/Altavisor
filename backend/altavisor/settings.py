@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     "corsheaders",
     # local
     "accounts",
+    "party",
     "people",
 ]
 

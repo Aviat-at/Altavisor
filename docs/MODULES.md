@@ -390,24 +390,53 @@ GET  /api/audit/logs/<id>/         # detail
 
 ---
 
-### 7. Person Module
+### 7. Party Module
 
 **Status:** `✅ Complete`
 
-The central master data module for all human entities. Stores reusable person profiles that can be linked to multiple business contexts without duplication. A person may represent different roles over time (direct customer, company contact, commission holder) without requiring a new record. Includes built-in dynamic category management through a many-to-many framework.
+The foundational identity layer used by all entity types. Implements the Party Pattern — a shared `Party` record acts as the identity base, and entity-specific models (`Person`, `Company`) extend it via `OneToOneField`. All sub-resources (categories, addresses, notes, attachments, relationships) live on `Party`, eliminating duplication across entity types.
+
+**Key capabilities:**
+- Shared identity base (`Party`) for all entity types
+- Category management (system and custom, with soft deactivation)
+- Address management (multiple addresses per party with labels and default)
+- Immutable notes (append-only audit trail)
+- File attachments
+- Party relationships (`PartyRelationship`) — replaces the old plain-field org relation pattern
+
+#### Backend
+
+**App:** `backend/party/`
+
+**Models:** `Party`, `PartyCategory`, `PartyCategoryAssignment`, `PartyAddress`, `PartyNote`, `PartyAttachment`, `PartyRelationship` — documented in full in ARCHITECTURE.md party app section.
+
+**Services (`party/services.py`):** `create_category()`, `update_category()`, `deactivate_category()`, `assign_category()`, `remove_category()`, `create_address()`, `update_address()`, `create_note()`, `link_to_party()`, `update_party_relationship()`, `close_party_relationship()`
+
+**Selectors (`party/selectors.py`):** `get_party_by_id()`, `get_party_categories()`, `get_party_addresses()`, `get_party_notes()`, `get_party_relationships()`
+
+**Exceptions (`party/exceptions.py`):** `PartyNotFoundError`, `CategoryNotFoundError`, `CategoryInactiveError`, `CategorySystemProtectedError`, `DuplicateCategoryAssignmentError`, `AddressNotFoundError`, `RelationshipNotFoundError`, `RelationshipConflictError`
+
+No dedicated URL routes — all access goes through the entity apps (people, companies) which proxy to party services.
+
+---
+
+### 8. Person Module
+
+**Status:** `✅ Complete`
+
+The central master data module for all human entities. Stores reusable person profiles that can be linked to multiple business contexts without duplication. A person may represent different roles over time (direct customer, company contact, commission holder) without requiring a new record.
 
 **Typical person types:** Direct customer, company representative, supplier contact, commission holder, billing contact, delivery contact, employee-related contact, external business contact
 
 **Key capabilities:**
 - Person registration and profile management
 - Contact information management (email, phone, mobile)
-- Address management (multiple addresses with labels and default)
-- Notes and attachments
-- Lifecycle status management (active/inactive with soft deactivation)
+- Address management, notes, and attachments (via Party)
+- Lifecycle status management (active/inactive with soft deactivation + reactivation)
 - Person search and filtering
 - Reusable person identity across modules without duplication
-- Linked company relationships via Org–Person Relationship
-- Dynamic category assignment (many-to-many)
+- Linked party relationships via `PartyRelationship`
+- Dynamic category assignment (many-to-many, via Party)
 - Duplicate detection on create and update (email, name, phone signals)
 - Person merge (endpoint defined; full implementation deferred)
 
@@ -416,8 +445,6 @@ The central master data module for all human entities. Stores reusable person pr
 - Protected system categories (cannot be renamed, re-slugged, or deactivated via API)
 - Multiple category assignment per person
 - Soft removal preserving assignment history
-- Category-based discount and access profile mapping (planned — via Pricing module)
-- Category history and audit tracking
 
 **Example person categories:** Customer, Company Representative, VIP Gold, Commission Holder, Preferred Contact, Seasonal Buyer
 
@@ -425,27 +452,17 @@ The central master data module for all human entities. Stores reusable person pr
 
 **App:** `backend/people/`
 
-**Architecture:** Four-layer pattern — models → services (writes) → selectors (reads) → views (HTTP).
+**Architecture:** Four-layer pattern — models → services (writes) → selectors (reads) → views (HTTP). Sub-resource writes delegate to `party.services`.
 
 ---
 
 **Models:**
 
-**`PersonCategory`** — `people_person_categories`
-
-| Field | Type | Notes |
-|---|---|---|
-| `name` | CharField(100, unique) | Category label |
-| `slug` | SlugField(120, unique) | Auto-generated from name via `slugify()` |
-| `description` | TextField (blank) | |
-| `is_system` | BooleanField | System categories cannot be renamed, re-slugged, or deactivated via API |
-| `is_active` | BooleanField (db_index) | Soft deactivation |
-| `created_at` / `updated_at` | DateTimeField | Via `TimestampedModel` |
-
 **`Person`** — `people_persons`
 
 | Field | Type | Notes |
 |---|---|---|
+| `party` | OneToOneField → Party (CASCADE) | Identity base — categories, addresses, notes, relationships attach here |
 | `first_name` | CharField(100) | |
 | `last_name` | CharField(100) | |
 | `preferred_name` | CharField(100, blank) | Display name override |
@@ -454,75 +471,12 @@ The central master data module for all human entities. Stores reusable person pr
 | `mobile` | CharField(30, blank) | |
 | `date_of_birth` | DateField (null) | |
 | `gender` | CharField choices | `male`, `female`, `other`, `prefer_not_to_say` |
-| `is_active` | BooleanField (db_index) | |
-| `created_by` | FK → User (SET_NULL) | |
-| `categories` | M2M → PersonCategory (through `PersonCategoryAssignment`) | |
 
 Indexes: `(last_name, first_name)`, `(email)`
 
 Computed properties: `full_name`, `display_name`, `initials`
 
-**`PersonCategoryAssignment`** — `people_category_assignments`
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `category` | FK → PersonCategory (CASCADE) | |
-| `assigned_by` | FK → User (SET_NULL) | |
-| `is_active` | BooleanField (db_index) | Soft deactivation — preserved for history |
-
-`unique_together`: `(person, category)` — one row per pair; reactivated instead of duplicated.
-
-**`PersonAddress`** — `people_addresses`
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `label` | CharField choices | `billing`, `delivery`, `home`, `work`, `other` |
-| `line1` | CharField(200) | |
-| `line2` | CharField(200, blank) | |
-| `city` | CharField(100) | |
-| `state_province` | CharField(100, blank) | |
-| `postal_code` | CharField(20, blank) | |
-| `country` | CharField(100) | |
-| `is_default` | BooleanField | Service enforces at most one default per person |
-| `is_active` | BooleanField (db_index) | |
-
-Index: `(person, is_default)`
-
-**`PersonNote`** — `people_notes`
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `body` | TextField | |
-| `author` | FK → User (SET_NULL) | Preserved even if author is deleted |
-| `created_at` | DateTimeField (auto) | No `updated_at` — notes are immutable |
-
-**`PersonAttachment`** — `people_attachments`
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `label` | CharField(200) | |
-| `file` | FileField | `upload_to="people/attachments/%Y/%m/"` — upload deferred to phase 2 |
-| `uploaded_by` | FK → User (SET_NULL) | |
-| `created_at` | DateTimeField (auto) | |
-
-**`OrganizationPersonRelation`** — `people_org_relations`
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `organization_id` | PositiveIntegerField (db_index) | Plain ID — not a FK; migrated to proper FK when companies app ships |
-| `organization_type` | CharField(50) | e.g. `customer`, `supplier`, `partner` |
-| `role` | CharField(100) | e.g. `representative`, `billing`, `commission_holder` |
-| `is_primary` | BooleanField | |
-| `is_active` | BooleanField (db_index) | |
-| `started_on` | DateField (null) | |
-| `ended_on` | DateField (null) | Set by `close_organization_relationship()` |
-
-`unique_together`: `(person, organization_id, organization_type, role)` — prevents duplicate rows.
+All sub-resources (categories, addresses, notes, attachments, relationships) are accessed via `person.party` and are defined in the `party` app — see Module 7.
 
 ---
 
@@ -531,21 +485,13 @@ Index: `(person, is_default)`
 | Service | Transaction | Description |
 |---|---|---|
 | `detect_duplicate_persons()` | No | Returns candidates: email match (high), name match (medium), phone match (medium) |
-| `create_person()` | `@atomic` | Runs duplicate check unless `force=True`; stores `None` for empty email |
+| `create_person()` | `@atomic` | Creates `Party(party_type=PERSON)` first, then `Person`; runs duplicate check unless `force=True` |
 | `update_person()` | `@atomic` | `select_for_update()` to prevent race; re-runs duplicate check excluding self |
-| `deactivate_person()` | `@atomic` | Sets `is_active=False`; bulk-closes org relations; bulk-deactivates category assignments |
+| `deactivate_person()` | `@atomic` | Sets `party.is_active=False`; bulk-closes org relations; bulk-deactivates category assignments |
+| `reactivate_person()` | `@atomic` | Sets `party.is_active=True` |
 | `merge_persons()` | — | Raises `MergePersonError` — intentionally unimplemented; documented contract for future |
-| `create_category()` | No | Auto-slugifies name; rejects duplicate slug or name; `is_system=False` always |
-| `update_category()` | No | Blocks name change on system categories; re-slugifies on name update |
-| `deactivate_category()` | `@atomic` | Blocks system categories; bulk-deactivates all assignments for this category; idempotent |
-| `assign_category()` | `@atomic` | Reactivates existing inactive assignment instead of creating duplicate row |
-| `remove_category()` | No | Soft-deactivates assignment; raises if no active assignment found |
-| `create_address()` | `@atomic` | Demotes existing default if `is_default=True` |
-| `update_address()` | `@atomic` | Demotes other defaults if promoting this one |
-| `create_note()` | No | Validates non-empty body; immutable after creation |
-| `link_person_to_organization()` | `@atomic` | Blocks duplicate active relation for same (person, org_id, org_type, role) |
-| `update_organization_relationship()` | No | Only `role`, `is_primary`, `started_on` are mutable |
-| `close_organization_relationship()` | No | Sets `is_active=False`, `ended_on=today`; idempotent |
+
+Party sub-resource services (categories, addresses, notes, relationships) are in `party/services.py` — see Module 7.
 
 ---
 
@@ -553,20 +499,17 @@ Index: `(person, is_default)`
 
 | Selector | Returns | Notes |
 |---|---|---|
-| `list_persons()` | paginated dict | Prefetches `active_assignments` as `to_attr` to avoid N+1 |
-| `get_person_detail()` | Person instance | Prefetches addresses, active_assignments, org_relations, notes, attachments |
+| `list_persons()` | paginated dict | Prefetches party + `active_assignments` as `to_attr` to avoid N+1 |
+| `get_person_detail()` | Person instance | Prefetches all party sub-resources for detail view |
 | `search_persons()` | queryset | Lightweight autocomplete — name/email icontains |
-| `list_categories()` | queryset | Optional `is_active`, `is_system` filters |
-| `get_category()` | PersonCategory | Raises `CategoryNotFoundError` |
-| `get_person_categories()` | queryset | `select_related("category", "assigned_by")` |
+| `list_categories()` | queryset | Delegates to `party.selectors.get_party_categories()` |
 | `get_person_addresses()` | queryset | Default-first ordering |
-| `get_person_notes()` | queryset | `select_related("author")`; newest first |
-| `get_person_attachments()` | queryset | `select_related("uploaded_by")`; newest first |
+| `get_person_notes()` | queryset | Newest first |
 | `get_person_organizations()` | queryset | `active_only=False` default — returns full history |
 
 ---
 
-**Serializers** (`serializers.py`):
+**Serializers** (`serializers.py`) — API response shape is kept flat; party sub-resources are surfaced as top-level person fields:
 
 | Serializer | Used for |
 |---|---|
@@ -585,8 +528,8 @@ Index: `(person, is_default)`
 | `PersonNoteSerializer` | Note read — resolves `author_name` via method field |
 | `PersonNoteWriteSerializer` | Note create — just `body` |
 | `PersonAttachmentSerializer` | Attachment read — resolves `uploaded_by_name` |
-| `OrganizationPersonRelationSerializer` | Relation read |
-| `OrganizationPersonRelationWriteSerializer` | Relation create |
+| `OrganizationPersonRelationSerializer` | Relation read — fields: id, from_party_id, to_party_id, role, is_primary, is_active, started_on, ended_on |
+| `OrganizationPersonRelationWriteSerializer` | Relation create — to_party_id (optional), role, is_primary, started_on |
 | `OrganizationPersonRelationUpdateSerializer` | Relation update — role, is_primary, started_on only |
 
 ---
@@ -614,18 +557,18 @@ Index: `(person, is_default)`
 | PATCH | `categories/<id>/` | IsAdminUser | `category_update` |
 | POST | `categories/<id>/deactivate/` | IsAdminUser | `category_deactivate` |
 
-**Domain exceptions** (`exceptions.py`):
+**Domain exceptions** (`exceptions.py`) — re-exports party exceptions plus person-specific ones:
 
 ```
 PeopleModuleError (base)
 ├── PersonNotFoundError
 ├── PersonInactiveError
 ├── DuplicatePersonError          — carries .candidates list
-├── CategoryNotFoundError
-├── CategoryInactiveError
-├── CategorySystemProtectedError
-├── DuplicateCategoryAssignmentError
-├── AddressNotFoundError
+├── CategoryNotFoundError         — re-exported from party.exceptions
+├── CategoryInactiveError         — re-exported from party.exceptions
+├── CategorySystemProtectedError  — re-exported from party.exceptions
+├── DuplicateCategoryAssignmentError — re-exported from party.exceptions
+├── AddressNotFoundError          — re-exported from party.exceptions
 ├── OrganizationRelationNotFoundError
 ├── OrganizationRelationConflictError
 └── MergePersonError
@@ -707,7 +650,7 @@ PersonCategoryAssignment   // id, category: PersonCategory, assigned_by_name, is
 PersonAddress              // id, label, label_display, line1, line2, city, state_province, postal_code, country, is_default, is_active
 PersonNote                 // id, body, author_name, created_at
 PersonAttachment           // id, label, file, uploaded_by_name, created_at
-OrganizationPersonRelation // id, person_id, organization_id, organization_type, role, is_primary, is_active, started_on, ended_on
+OrganizationPersonRelation // id, from_party_id, to_party_id: number|null, role, is_primary, is_active, started_on, ended_on
 PersonListItem             // id, full_name, display_name, email, phone, is_active, primary_category, created_at
 PersonDetail               // extends PersonListItem + addresses[], category_assignments[], org_relations[], notes[], attachments[]
 PaginatedPersons           // results: PersonListItem[], count, page, page_size, has_next
@@ -717,30 +660,28 @@ ApiError                   // status: number, body: { detail?, code?, candidates
 
 ---
 
-### 8. Partner Company Module
+### 9. Partner Company Module
 
 **Status:** `⬜ Planned`
 
-Master data module for all external organizations. Mirrors the Person Module architecture — company registration, built-in category management, and address/note/attachment sub-resources follow the same patterns as the people domain.
+Master data module for all external organizations. Uses the Party Pattern — a `Company` extends `Party` via `OneToOneField`, and all sub-resources (categories, addresses, notes, attachments, relationships) are shared from the `party` app, not duplicated.
 
 **Typical partner company types:** Customer companies, suppliers, distributors, subcontractors, service providers, logistics companies, commission partners, strategic business partners
 
 **Key capabilities:**
 - Company registration (legal name, trading name, registration number, tax ID)
 - Legal and contact information management
-- Address management (registered, billing, branch offices)
-- Notes and attachments
+- Address management, notes, and attachments (via Party)
 - Lifecycle status control (active/inactive with soft deactivation)
-- Linked person management via Org–Person Relationship
+- Linked person management via `PartyRelationship`
 - Company search and filtering
 - Reusable company identity across modules without duplication
-- Dynamic category assignment (many-to-many — same model as Person categories)
+- Dynamic category assignment (many-to-many, via Party)
 
 **Company category capabilities (built-in):**
-- System and custom company categories
+- System and custom categories shared with the `party` app (`PartyCategory`)
 - Many-to-many category assignment per company
 - Category-based discount and pricing profile mapping (via Pricing module)
-- Category-based business access profile mapping
 - Company segmentation and reporting
 
 **Example company categories:** Customer Company, Supplier, Dealer, Strategic Partner, Logistics Partner, Preferred Supplier
@@ -751,14 +692,11 @@ Master data module for all external organizations. Mirrors the Person Module arc
 
 **Planned models:**
 
-- `CompanyCategory` — mirrors `PersonCategory`: name, slug, is_system, is_active
-- `Company` — legal_name, trading_name, registration_number, tax_id, website, email, phone, is_active, created_by
-- `CompanyCategoryAssignment` — M2M through model with is_active (same pattern as `PersonCategoryAssignment`)
-- `CompanyAddress` — same fields as `PersonAddress`
-- `CompanyNote` — immutable, same pattern as `PersonNote`
-- `CompanyAttachment` — same pattern as `PersonAttachment`
+- `Company` — `party` (OneToOneField → Party), `legal_name`, `trading_name`, `registration_number`, `tax_id`, `website`, `email`, `phone`
 
-**Planned services:** `create_company()`, `update_company()`, `deactivate_company()`, `assign_company_category()`, `remove_company_category()`, `deactivate_company_category()`, `create_company_address()`, `create_company_note()`
+All sub-resources (categories, addresses, notes, attachments, relationships) are shared from `party` app models — no per-company duplicates.
+
+**Planned services:** `create_company()`, `update_company()`, `deactivate_company()` — sub-resource writes delegate to `party.services`
 
 **Planned endpoints** (mirrors `/api/people/`):
 ```
@@ -799,15 +737,14 @@ POST           /api/companies/categories/<id>/deactivate/
 
 ---
 
-### 9. Organization–Person Relationship Management
+### 10. Party Relationship Management
 
 **Status:** `🔨 In Progress` — backend complete; frontend embedded inside People Profile → Organizations panel only (no standalone nav entry, no company-side view)
 
-Manages relationships between persons and partner companies. Tracks who represents whom and in what capacity. One person can link to multiple companies; one company can have multiple linked persons.
+Manages relationships between parties (persons and partner companies). Implemented via `PartyRelationship` in the `party` app. Tracks who represents whom and in what capacity. One person can link to multiple companies; one company can have multiple linked persons.
 
 **Key capabilities:**
 - Link person to company with a defined relationship type
-- Define relationship type, designation, and department
 - Set primary contact flag per company
 - Start and end date tracking (temporal lifecycle)
 - Full relationship history (closed relations preserved)
@@ -820,24 +757,24 @@ Manages relationships between persons and partner companies. Tracks who represen
 
 #### Backend
 
-**App:** `backend/people/` — org relations are sub-resources of the Person.
+**App:** `backend/party/` — `PartyRelationship` is a sub-resource of `Party`.
 
-**Model:** `OrganizationPersonRelation` (documented fully in Module 7)
+**Model:** `PartyRelationship` — `from_party` (FK → Party), `to_party` (FK → Party, nullable), `role`, `is_primary`, `is_active`, `started_on`, `ended_on`
 
-**Key design decision:** `organization_id` and `organization_type` are plain fields — not a FK — because the companies app does not exist yet. When `backend/companies/` ships, this becomes a proper `ForeignKey(Company)` migration.
+**Key design decision:** `to_party` is a nullable FK — left null until the companies app ships and a company `Party` record can be referenced. The duplicate-check constraint is skipped when `to_party=None` (SQLite NULL != NULL).
 
-**Services:** `link_person_to_organization()`, `update_organization_relationship()`, `close_organization_relationship()` — documented in Module 7.
+**Services:** `link_to_party()`, `update_party_relationship()`, `close_party_relationship()` — in `party/services.py`.
 
-**Endpoints:** All under `/api/people/persons/<id>/organizations/` — documented in Module 7.
+**Endpoints:** Surfaced via people app at `/api/people/persons/<id>/organizations/` — documented in Module 8's Person section.
 
 **What's missing:**
 - No standalone nav tab — accessible only via People → Profile → Organizations panel
-- No company-side view — when Partner Company module ships, `GET /api/companies/companies/<id>/persons/` will show all linked persons from the company's perspective, queried from the same `OrganizationPersonRelation` table filtered by `organization_id` and `organization_type`
+- No company-side view — when Partner Company module ships, `GET /api/companies/companies/<id>/persons/` will query `PartyRelationship` filtered by `to_party=company.party`
 - No standalone relationship browser across all persons and companies
 
 #### Frontend
 
-Accessible via `people` → `profile` → Organizations panel. No standalone nav entry currently. Documented fully in Module 7's ProfilePage section.
+Accessible via `people` → `profile` → Organizations panel. No standalone nav entry currently. Documented fully in Module 8's ProfilePage section.
 
 ---
 

@@ -352,16 +352,24 @@ backend/
 │   ├── admin.py            # Django admin registration
 │   └── migrations/
 │
-├── people/                 # Person module — master data for human entities
-│   ├── models.py           # Person, PersonCategory, PersonCategoryAssignment,
-│   │                       # PersonAddress, PersonNote, PersonAttachment,
-│   │                       # OrganizationPersonRelation, TimestampedModel
-│   ├── services.py         # All write operations and business logic
-│   ├── selectors.py        # All read/query operations
+├── party/                  # Party pattern — shared identity base for all entities
+│   ├── models.py           # Party, PartyCategory, PartyCategoryAssignment,
+│   │                       # PartyAddress, PartyNote, PartyAttachment, PartyRelationship
+│   ├── services.py         # All party-level write operations and business logic
+│   ├── selectors.py        # All party-level read/query operations
+│   ├── serializers.py      # Party sub-resource serializers
+│   ├── exceptions.py       # Party domain exception hierarchy
+│   ├── admin.py            # Django admin registration
+│   └── migrations/
+│
+├── people/                 # Person module — human entity type extending Party
+│   ├── models.py           # Person (extends Party via OneToOneField)
+│   ├── services.py         # All write operations and business logic for persons
+│   ├── selectors.py        # All read/query operations for persons
 │   ├── serializers.py      # All request validation and response shapes
 │   ├── views.py            # Thin HTTP layer — calls services/selectors only
 │   ├── urls.py             # /api/people/* routes
-│   ├── exceptions.py       # Domain exception hierarchy
+│   ├── exceptions.py       # Re-exports from party.exceptions + person-specific exceptions
 │   ├── admin.py            # Django admin registration
 │   └── migrations/
 │
@@ -411,6 +419,7 @@ INSTALLED_APPS = [
     "corsheaders",
     # Local apps
     "accounts",
+    "party",
     "people",
 ]
 ```
@@ -510,26 +519,101 @@ All mounted at `/api/auth/`.
 
 ---
 
-### people app
+### party app
 
-#### Models (`people/models.py`)
+The `party` app implements the Party Pattern — a shared identity base that all entity types (Person, Company, etc.) extend. All sub-resources (categories, addresses, notes, attachments, relationships) live on `Party`, not on the entity models directly.
 
-**`TimestampedModel`** — abstract base; adds `created_at` and `updated_at` (auto) to all people models except `PersonNote`.
+#### Models (`party/models.py`)
 
-**`PersonCategory`** — DB table: `people_person_categories`
+**`Party`** — DB table: `party_parties`
+
+| Field | Type | Notes |
+|---|---|---|
+| `party_type` | CharField choices | `person`, `company` |
+| `is_active` | BooleanField | |
+| `created_by` | FK → User (SET_NULL) | |
+| `created_at` / `updated_at` | DateTimeField (auto) | |
+
+**`PartyCategory`** — DB table: `party_categories`
 
 | Field | Type | Notes |
 |---|---|---|
 | `name` | CharField(100, unique) | |
-| `slug` | SlugField(120, unique) | Auto-generated from name via `slugify()` in service |
+| `slug` | SlugField(120, unique) | Auto-generated from name via `slugify()` |
 | `description` | TextField (blank) | |
-| `is_system` | BooleanField | Blocks rename, re-slug, deactivate via API. Enforced in service layer |
-| `is_active` | BooleanField (db_index) | Soft deactivation |
+| `is_system` | BooleanField | Blocks rename, re-slug, deactivate via API |
+| `is_active` | BooleanField (db_index) | |
+
+**`PartyCategoryAssignment`** — through model for Party ↔ PartyCategory M2M
+
+| Field | Type | Notes |
+|---|---|---|
+| `party` | FK → Party (CASCADE) | |
+| `category` | FK → PartyCategory (CASCADE) | |
+| `assigned_by` | FK → User (SET_NULL) | |
+| `is_active` | BooleanField | Soft remove — row preserved for history |
+
+`unique_together`: `(party, category)`.
+
+**`PartyAddress`** — DB table: `party_addresses`
+
+| Field | Type | Notes |
+|---|---|---|
+| `party` | FK → Party (CASCADE) | |
+| `label` | CharField choices | `billing`, `delivery`, `home`, `work`, `other` |
+| `line1` | CharField(200) | |
+| `line2` | CharField(200, blank) | |
+| `city` | CharField(100) | |
+| `state_province` | CharField(100, blank) | |
+| `postal_code` | CharField(20, blank) | |
+| `country` | CharField(100) | |
+| `is_default` | BooleanField | Service enforces at most one default per party |
+| `is_active` | BooleanField (db_index) | |
+
+**`PartyNote`** — immutable audit record; no `updated_at`
+
+| Field | Type |
+|---|---|
+| `party` | FK → Party (CASCADE) |
+| `body` | TextField |
+| `author` | FK → User (SET_NULL) |
+| `created_at` | DateTimeField (auto) |
+
+**`PartyAttachment`** — model schema defined; file upload deferred
+
+| Field | Type | Notes |
+|---|---|---|
+| `party` | FK → Party (CASCADE) | |
+| `label` | CharField(200) | |
+| `file` | FileField | |
+| `uploaded_by` | FK → User (SET_NULL) | |
+| `created_at` | DateTimeField (auto) | |
+
+**`PartyRelationship`** — DB table: `party_relationships`
+
+| Field | Type | Notes |
+|---|---|---|
+| `from_party` | FK → Party (CASCADE) | The person/entity in the relationship |
+| `to_party` | FK → Party (SET_NULL, null) | The org/entity being linked; nullable until companies app ships |
+| `role` | CharField(100) | e.g. `representative`, `billing`, `commission_holder` |
+| `is_primary` | BooleanField | |
+| `is_active` | BooleanField (db_index) | |
+| `started_on` | DateField (null) | |
+| `ended_on` | DateField (null) | Set by close service |
+
+`unique_together`: `(from_party, to_party, role)` — enforced only when `to_party` is not NULL (SQLite NULL != NULL).
+
+---
+
+### people app
+
+#### Models (`people/models.py`)
 
 **`Person`** — DB table: `people_persons`
 
 | Field | Type | Notes |
 |---|---|---|
+| `party` | OneToOneField → Party (CASCADE) | Identity base — all sub-resources attach to `party` |
 | `first_name` | CharField(100) | |
 | `last_name` | CharField(100) | |
 | `preferred_name` | CharField(100, blank) | Display name override |
@@ -538,135 +622,76 @@ All mounted at `/api/auth/`.
 | `mobile` | CharField(30, blank) | |
 | `date_of_birth` | DateField (null) | |
 | `gender` | CharField choices | `male`, `female`, `other`, `prefer_not_to_say` |
-| `is_active` | BooleanField (db_index) | |
-| `created_by` | FK → User (SET_NULL) | |
-| `categories` | M2M → PersonCategory | Through `PersonCategoryAssignment` |
 
 DB indexes: `(last_name, first_name)`, `(email)`. Computed: `full_name`, `display_name`, `initials`.
 
-**`PersonCategoryAssignment`** — DB table: `people_category_assignments`
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `category` | FK → PersonCategory (CASCADE) | |
-| `assigned_by` | FK → User (SET_NULL) | |
-| `is_active` | BooleanField (db_index) | Soft remove — row preserved for history |
-
-`unique_together`: `(person, category)`. Service reactivates existing inactive row instead of creating a duplicate.
-
-**`PersonAddress`** — DB table: `people_addresses`
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `label` | CharField choices | `billing`, `delivery`, `home`, `work`, `other` |
-| `line1` | CharField(200) | |
-| `line2` | CharField(200, blank) | |
-| `city` | CharField(100) | |
-| `state_province` | CharField(100, blank) | |
-| `postal_code` | CharField(20, blank) | |
-| `country` | CharField(100) | |
-| `is_default` | BooleanField | Service enforces at most one default per person |
-| `is_active` | BooleanField (db_index) | |
-
-DB index: `(person, is_default)`.
-
-**`PersonNote`** — DB table: `people_notes`
-
-Immutable audit record. No `updated_at`. No soft delete. Author FK uses `SET_NULL` so notes survive user deletion.
-
-| Field | Type |
-|---|---|
-| `person` | FK → Person (CASCADE) |
-| `body` | TextField |
-| `author` | FK → User (SET_NULL) |
-| `created_at` | DateTimeField (auto) |
-
-**`PersonAttachment`** — DB table: `people_attachments`
-
-Model schema defined; file upload deferred. `MEDIA_ROOT` and `MEDIA_URL` not yet configured in `settings.py`.
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `label` | CharField(200) | |
-| `file` | FileField | `upload_to="people/attachments/%Y/%m/"` |
-| `uploaded_by` | FK → User (SET_NULL) | |
-| `created_at` | DateTimeField (auto) | |
-
-**`OrganizationPersonRelation`** — DB table: `people_org_relations`
-
-| Field | Type | Notes |
-|---|---|---|
-| `person` | FK → Person (CASCADE) | |
-| `organization_id` | PositiveIntegerField (db_index) | Plain ID — not a FK. Avoids GenericForeignKey performance penalty. Migrates to proper FK when companies app ships |
-| `organization_type` | CharField(50) | e.g. `customer`, `supplier`, `partner` |
-| `role` | CharField(100) | e.g. `representative`, `billing`, `commission_holder` |
-| `is_primary` | BooleanField | |
-| `is_active` | BooleanField (db_index) | |
-| `started_on` | DateField (null) | |
-| `ended_on` | DateField (null) | Set by `close_organization_relationship()` |
-
-`unique_together`: `(person, organization_id, organization_type, role)`. DB index: `(organization_id, organization_type)`.
+All sub-resources (categories, addresses, notes, attachments, relationships) are accessed via `person.party` and live in the `party` app models.
 
 #### Services (`people/services.py`)
 
-All writes. All business rules. All `@transaction.atomic` blocks.
+All writes. All business rules. All `@transaction.atomic` blocks. Party sub-resource writes (categories, addresses, notes, relationships) delegate to `party.services`.
 
 | Service | Atomic | Key behaviour |
 |---|---|---|
 | `detect_duplicate_persons()` | No | Checks email (high), name (medium), phone (medium); returns ranked candidates list |
-| `create_person()` | Yes | Runs duplicate check unless `force=True`; stores `None` for empty email |
+| `create_person()` | Yes | Creates `Party(party_type=PERSON)` first, then `Person`; runs duplicate check unless `force=True` |
 | `update_person()` | Yes | `select_for_update()` prevents concurrent-write race; re-runs dupe check excluding self |
-| `deactivate_person()` | Yes | Sets `is_active=False`; bulk-closes org relations; bulk-deactivates category assignments |
-| `merge_persons()` | — | Raises `MergePersonError` — documented contract, intentionally not implemented until all downstream modules exist |
-| `create_category()` | No | Auto-slugifies; blocks duplicate slug or name; always `is_system=False` via API |
+| `deactivate_person()` | Yes | Sets `party.is_active=False`; bulk-closes org relations; bulk-deactivates category assignments |
+| `reactivate_person()` | Yes | Sets `party.is_active=True` |
+| `merge_persons()` | — | Raises `MergePersonError` — documented contract, intentionally not implemented |
+
+Party-level sub-resource services (in `party/services.py`):
+
+| Service | Atomic | Key behaviour |
+|---|---|---|
+| `create_category()` | No | Auto-slugifies; blocks duplicate slug or name |
 | `update_category()` | No | Blocks name change on system categories; re-slugifies on name update |
 | `deactivate_category()` | Yes | Blocks system categories; bulk-deactivates all assignments; idempotent |
-| `assign_category()` | Yes | Reactivates existing inactive assignment (respects `unique_together`) instead of creating duplicate row |
+| `assign_category()` | Yes | Reactivates existing inactive assignment instead of creating duplicate row |
 | `remove_category()` | No | Soft-deactivates assignment; raises if no active assignment found |
 | `create_address()` | Yes | Demotes existing default if `is_default=True` |
 | `update_address()` | Yes | Demotes other defaults when promoting this one |
 | `create_note()` | No | Validates non-empty body; immutable after creation |
-| `link_person_to_organization()` | Yes | Blocks duplicate active relation for same `(person, org_id, org_type, role)` |
-| `update_organization_relationship()` | No | Only `role`, `is_primary`, `started_on` are mutable |
-| `close_organization_relationship()` | No | Sets `is_active=False`, `ended_on=today`; idempotent |
+| `link_to_party()` | Yes | Creates `PartyRelationship`; skips duplicate check when `to_party=None` |
+| `update_party_relationship()` | No | Only `role`, `is_primary`, `started_on` are mutable |
+| `close_party_relationship()` | No | Sets `is_active=False`, `ended_on=today`; idempotent |
 
 #### Selectors (`people/selectors.py`)
 
-All reads. Never write. All ORM optimisation lives here.
+All reads. Never write.
 
-| Selector | Optimisation | Notes |
-|---|---|---|
-| `list_persons()` | `select_related("created_by")` + `Prefetch("category_assignments", to_attr="active_assignments")` | Returns paginated dict; `to_attr` avoids N+1 in list serializer |
-| `get_person_detail()` | Full prefetch of addresses, active_assignments, org_relations, notes, attachments | Single query set for detail view |
-| `search_persons()` | `icontains` on first_name, last_name, email | Lightweight autocomplete; returns queryset (caller slices) |
-| `list_categories()` | None | Optional `is_active`, `is_system` filters |
-| `get_person_categories()` | `select_related("category", "assigned_by")` | |
-| `get_person_addresses()` | Ordered `-is_default, label` | |
-| `get_person_notes()` | `select_related("author")`, ordered `-created_at` | |
-| `get_person_attachments()` | `select_related("uploaded_by")`, ordered `-created_at` | |
-| `get_person_organizations()` | Ordered `-is_active, -started_on, -created_at` | `active_only=False` default — returns full history |
+| Selector | Notes |
+|---|---|
+| `list_persons()` | Returns paginated dict; prefetches party + active_assignments to avoid N+1 |
+| `get_person_detail()` | Prefetches all party sub-resources (addresses, assignments, org_relations, notes, attachments) |
+| `search_persons()` | Lightweight autocomplete — name/email icontains |
+| `list_categories()` | Delegates to `party.selectors.get_party_categories()` |
+| `get_person_addresses()` | Delegates to `party.selectors.get_party_addresses()` |
+| `get_person_notes()` | Delegates to `party.selectors.get_party_notes()` |
+| `get_person_organizations()` | Returns full relationship history; `active_only=False` default |
 
 #### Domain Exceptions (`people/exceptions.py`)
+
+Re-exports `PartyNotFoundError` etc. from `party.exceptions`, plus person-specific exceptions:
 
 ```
 PeopleModuleError (base)
 ├── PersonNotFoundError               — person does not exist
 ├── PersonInactiveError               — operation on deactivated person
 ├── DuplicatePersonError              — carries .candidates list with reason per candidate
-├── CategoryNotFoundError             — category does not exist
-├── CategoryInactiveError             — category is inactive; cannot assign
-├── CategorySystemProtectedError      — system category; blocks rename/deactivate
-├── DuplicateCategoryAssignmentError  — assign: already active; remove: no active assignment
-├── AddressNotFoundError              — address not found for given person
+├── CategoryNotFoundError             — re-exported from party.exceptions
+├── CategoryInactiveError             — re-exported from party.exceptions
+├── CategorySystemProtectedError      — re-exported from party.exceptions
+├── DuplicateCategoryAssignmentError  — re-exported from party.exceptions
+├── AddressNotFoundError              — re-exported from party.exceptions
 ├── OrganizationRelationNotFoundError — org relation not found
-├── OrganizationRelationConflictError — duplicate active relation for same (person, org, type, role)
+├── OrganizationRelationConflictError — duplicate active relation for same (person, party, role)
 └── MergePersonError                  — merge not implemented; raised by placeholder service
 ```
 
 #### Serializers (`people/serializers.py`)
+
+The API response shape is kept flat — party sub-resources are surfaced as top-level person fields so the frontend does not need to know about the party layer.
 
 | Serializer | Used for | Key fields |
 |---|---|---|
@@ -685,8 +710,8 @@ PeopleModuleError (base)
 | `PersonNoteSerializer` | Note read | Resolves `author_name` via method field |
 | `PersonNoteWriteSerializer` | Note create | body only |
 | `PersonAttachmentSerializer` | Attachment read | Resolves `uploaded_by_name` |
-| `OrganizationPersonRelationSerializer` | Relation read | All fields |
-| `OrganizationPersonRelationWriteSerializer` | Relation create | organization_id, organization_type, role, is_primary, started_on |
+| `OrganizationPersonRelationSerializer` | Relation read | id, from_party_id, to_party_id, role, is_primary, is_active, started_on, ended_on |
+| `OrganizationPersonRelationWriteSerializer` | Relation create | to_party_id (optional), role, is_primary, started_on |
 | `OrganizationPersonRelationUpdateSerializer` | Relation update | role, is_primary, started_on only |
 
 #### Views and Endpoints (`people/views.py` → `people/urls.py`)

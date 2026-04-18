@@ -276,9 +276,13 @@ class PartyRelationship(TimestampedModel):
         on_delete=models.CASCADE,
         related_name="relationships_as_member",
     )
+    # to_party is nullable until the companies app ships and existing
+    # OrganizationPersonRelation rows can be pointed at real Party records.
     to_party = models.ForeignKey(
         Party,
-        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="relationships_as_org",
     )
     role = models.CharField(max_length=100)

@@ -61,6 +61,24 @@ def create_party(*, party_type: str, created_by=None, is_active: bool = True) ->
 
 
 @transaction.atomic
+def reactivate_party(*, party_id: int) -> Party:
+    """Reactivate a previously deactivated Party."""
+    try:
+        party = Party.objects.select_for_update().get(id=party_id)
+    except Party.DoesNotExist:
+        raise PartyNotFoundError(f"Party {party_id} not found.")
+
+    if party.is_active:
+        raise PartyInactiveError(f"Party {party_id} is already active.")
+
+    party.is_active = True
+    party.save(update_fields=["is_active", "updated_at"])
+
+    logger.info("Party reactivated: id=%s", party_id)
+    return party
+
+
+@transaction.atomic
 def deactivate_party(*, party_id: int) -> Party:
     """
     Soft-deactivate a Party and close all its active relationships and
@@ -435,7 +453,7 @@ def create_party_note(*, party_id: int, body: str, author=None) -> PartyNote:
 def link_parties(
     *,
     from_party_id: int,
-    to_party_id: int,
+    to_party_id: int = None,
     role: str,
     is_primary: bool = False,
     started_on=None,
@@ -443,34 +461,39 @@ def link_parties(
     """
     Link two parties in a directed role relationship.
 
-    Prevents creating a duplicate *active* relationship for the same
-    (from_party, to_party, role) combination.
+    to_party_id is optional until the companies app ships — rows migrated
+    from OrganizationPersonRelation have no real target Party yet and are
+    stored with to_party=None. Duplicate checking is skipped when to_party
+    is None because NULL != NULL in SQLite unique constraints.
     """
     try:
         from_party = Party.objects.get(id=from_party_id, is_active=True)
     except Party.DoesNotExist:
         raise PartyNotFoundError(f"Active party {from_party_id} not found.")
 
-    try:
-        to_party = Party.objects.get(id=to_party_id, is_active=True)
-    except Party.DoesNotExist:
-        raise PartyNotFoundError(f"Active party {to_party_id} not found.")
+    to_party = None
+    if to_party_id is not None:
+        try:
+            to_party = Party.objects.get(id=to_party_id, is_active=True)
+        except Party.DoesNotExist:
+            raise PartyNotFoundError(f"Active party {to_party_id} not found.")
 
     role = role.strip()
 
-    active_exists = PartyRelationship.objects.filter(
-        from_party=from_party,
-        to_party=to_party,
-        role=role,
-        is_active=True,
-    ).exists()
+    if to_party is not None:
+        active_exists = PartyRelationship.objects.filter(
+            from_party=from_party,
+            to_party=to_party,
+            role=role,
+            is_active=True,
+        ).exists()
 
-    if active_exists:
-        raise RelationshipConflictError(
-            f"An active relationship already exists for "
-            f"from_party={from_party_id}, to_party={to_party_id}, "
-            f"role='{role}'. Close the existing relationship before re-linking."
-        )
+        if active_exists:
+            raise RelationshipConflictError(
+                f"An active relationship already exists for "
+                f"from_party={from_party_id}, to_party={to_party_id}, "
+                f"role='{role}'. Close the existing relationship before re-linking."
+            )
 
     relationship = PartyRelationship.objects.create(
         from_party=from_party,

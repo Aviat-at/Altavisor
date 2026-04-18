@@ -15,6 +15,9 @@ from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
 from . import selectors, services
+
+# All exception names are importable from .exceptions — party-module exceptions
+# are re-exported there under their original names so this import block is unchanged.
 from .exceptions import (
     AddressNotFoundError,
     CategoryInactiveError,

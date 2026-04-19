@@ -14,17 +14,11 @@ from party.models import (
     PartyAttachment,
     PartyCategoryAssignment,
     PartyNote,
-    PartyRelationship,
 )
 from party.selectors import get_party_categories  # noqa: F401 — re-exported
 
 from .exceptions import CategoryNotFoundError, PersonNotFoundError
 from .models import Person
-
-try:
-    from party.models import PartyCategory
-except ImportError:
-    pass
 
 
 # ─── Person Selectors ──────────────────────────────────────────────────────────
@@ -104,10 +98,12 @@ def get_person_detail(*, person_id: int) -> Person:
     Prefetched relations available on the returned instance:
         .party.addresses          — active addresses only, default-first
         .party.active_assignments — active category assignments (to_attr)
-        .party.relationships_as_member — all relationships, active-first
         .party.notes              — all notes, newest-first
         .party.attachments        — all attachments, newest-first
+        .memberships              — org memberships via OrganizationMembership
     """
+    from organizations.models import OrganizationMembership
+
     try:
         return (
             Person.objects.select_related("party", "party__created_by")
@@ -126,12 +122,6 @@ def get_person_detail(*, person_id: int) -> Person:
                     to_attr="active_assignments",
                 ),
                 Prefetch(
-                    "party__relationships_as_member",
-                    queryset=PartyRelationship.objects.select_related(
-                        "to_party"
-                    ).order_by("-is_active", "-started_on", "-created_at"),
-                ),
-                Prefetch(
                     "party__notes",
                     queryset=PartyNote.objects.select_related(
                         "author"
@@ -142,6 +132,12 @@ def get_person_detail(*, person_id: int) -> Person:
                     queryset=PartyAttachment.objects.select_related(
                         "uploaded_by"
                     ).order_by("-created_at"),
+                ),
+                Prefetch(
+                    "memberships",
+                    queryset=OrganizationMembership.objects.select_related(
+                        "organization"
+                    ).order_by("-is_active", "-started_on", "-created_at"),
                 ),
             )
             .get(id=person_id)
@@ -264,23 +260,14 @@ def get_person_attachments(*, person_id: int):
     )
 
 
-# ─── Organization Relation Selectors ──────────────────────────────────────────
+# ─── Membership Selectors ──────────────────────────────────────────────────────
 
-def get_person_organizations(*, person_id: int, active_only: bool = False):
+def get_person_memberships(*, person_id: int, is_active: bool = None):
     """
-    Return PartyRelationship rows where the person's Party is from_party.
+    Return OrganizationMembership rows for a person.
 
-    active_only=False (default) returns both active and closed relationships
-    so the full history is visible.
+    Delegates to organizations.selectors.get_person_memberships.
+    Kept here as a convenience so people views can import from a single location.
     """
-    try:
-        person = Person.objects.select_related("party").get(id=person_id)
-    except Person.DoesNotExist:
-        raise PersonNotFoundError(f"Person {person_id} not found.")
-
-    qs = PartyRelationship.objects.filter(
-        from_party_id=person.party_id
-    ).select_related("to_party")
-    if active_only:
-        qs = qs.filter(is_active=True)
-    return qs.order_by("-is_active", "-started_on", "-created_at")
+    from organizations.selectors import get_person_memberships as _get
+    return _get(person_id=person_id, is_active=is_active)

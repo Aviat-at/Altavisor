@@ -15,10 +15,8 @@ from django.db import transaction
 import party.services as party_services
 from party.exceptions import (
     DuplicateCategoryAssignmentError,
-    RelationshipConflictError,
-    RelationshipNotFoundError,
 )
-from party.models import Party, PartyAddress, PartyCategoryAssignment, PartyRelationship
+from party.models import Party, PartyAddress, PartyCategoryAssignment
 
 from .exceptions import (
     DuplicatePersonError,
@@ -427,55 +425,3 @@ def create_note(*, person_id: int, body: str, author=None):
     )
 
 
-# ─── Organization Relation Use Cases ──────────────────────────────────────────
-
-@transaction.atomic
-def link_person_to_organization(*, data: dict, created_by=None):
-    """
-    Link a person's Party to another Party in a specific role.
-
-    data["to_party_id"] is optional until the companies app ships — pass
-    it as None to create a pending relationship.
-
-    Replaces the legacy link_person_to_organization(organization_id,
-    organization_type) pattern with Party-to-Party semantics.
-    """
-    person_id = data["person_id"]
-    person = _get_active_person(person_id)
-
-    try:
-        relation = party_services.link_parties(
-            from_party_id=person.party_id,
-            to_party_id=data.get("to_party_id"),
-            role=data["role"].strip(),
-            is_primary=data.get("is_primary", False),
-            started_on=data.get("started_on"),
-        )
-    except RelationshipConflictError:
-        raise
-
-    logger.info(
-        "Person org relation created: person=%s to_party=%s role=%s by=%s",
-        person_id,
-        data.get("to_party_id"),
-        data["role"],
-        getattr(created_by, "email", created_by),
-    )
-    return relation
-
-
-def update_organization_relationship(*, relation_id: int, data: dict, updated_by=None):
-    """Update mutable fields on a PartyRelationship."""
-    try:
-        return party_services.update_party_relationship(
-            relationship_id=relation_id, **data
-        )
-    except Exception:
-        raise RelationshipNotFoundError(
-            f"Organization relation {relation_id} not found."
-        ) from None
-
-
-def close_organization_relationship(*, relation_id: int, closed_by=None):
-    """Soft-close a PartyRelationship."""
-    return party_services.close_party_relationship(relationship_id=relation_id)

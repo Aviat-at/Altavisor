@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "accounts",
     "party",
     "people",
+    "organizations",
 ]
 
 MIDDLEWARE = [

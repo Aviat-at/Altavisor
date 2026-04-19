@@ -70,23 +70,6 @@ urlpatterns = [
         name="people-person-notes",
     ),
 
-    # ── Person → Organizations ─────────────────────────────────────────────────
-    path(
-        "persons/<int:person_id>/organizations/",
-        views.person_organizations,
-        name="people-person-organizations",
-    ),
-    path(
-        "persons/<int:person_id>/organizations/<int:relation_id>/",
-        views.person_organization_update,
-        name="people-person-organization-update",
-    ),
-    path(
-        "persons/<int:person_id>/organizations/<int:relation_id>/close/",
-        views.person_organization_close,
-        name="people-person-organization-close",
-    ),
-
     # ── Person → Attachments ───────────────────────────────────────────────────
     path(
         "persons/<int:person_id>/attachments/",

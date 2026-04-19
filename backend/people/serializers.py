@@ -16,7 +16,6 @@ from party.models import (
     PartyCategory,
     PartyCategoryAssignment,
     PartyNote,
-    PartyRelationship,
 )
 
 from .models import Person
@@ -126,34 +125,6 @@ class CategoryAssignWriteSerializer(serializers.Serializer):
     category_id = serializers.IntegerField(min_value=1)
 
 
-# ─── Organization Relation Serializers ────────────────────────────────────────
-# The underlying model changed from OrganizationPersonRelation to
-# PartyRelationship. Response shape now uses from_party_id / to_party_id
-# instead of organization_id / organization_type.
-
-class OrganizationPersonRelationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PartyRelationship
-        fields = [
-            "id", "from_party_id", "to_party_id", "role",
-            "is_primary", "is_active", "started_on", "ended_on",
-            "created_at", "updated_at",
-        ]
-        read_only_fields = fields
-
-
-class OrganizationPersonRelationWriteSerializer(serializers.Serializer):
-    to_party_id = serializers.IntegerField(min_value=1, required=False, allow_null=True)
-    role = serializers.CharField(max_length=100)
-    is_primary = serializers.BooleanField(default=False, required=False)
-    started_on = serializers.DateField(required=False, allow_null=True)
-
-
-class OrganizationPersonRelationUpdateSerializer(serializers.Serializer):
-    role = serializers.CharField(max_length=100, required=False)
-    is_primary = serializers.BooleanField(required=False)
-    started_on = serializers.DateField(required=False, allow_null=True)
-
 
 # ─── Person Serializers ────────────────────────────────────────────────────────
 
@@ -211,15 +182,15 @@ class PersonDetailSerializer(serializers.ModelSerializer):
     category_assignments = PersonCategoryAssignmentSerializer(
         source="party.active_assignments", many=True, read_only=True
     )
-    org_relations = OrganizationPersonRelationSerializer(
-        source="party.relationships_as_member", many=True, read_only=True
-    )
     notes = PersonNoteSerializer(
         source="party.notes", many=True, read_only=True
     )
     attachments = PersonAttachmentSerializer(
         source="party.attachments", many=True, read_only=True
     )
+
+    # Memberships via OrganizationMembership (people → organizations)
+    memberships = serializers.SerializerMethodField()
 
     class Meta:
         model = Person
@@ -230,9 +201,16 @@ class PersonDetailSerializer(serializers.ModelSerializer):
             "date_of_birth", "gender", "gender_display",
             "is_active", "created_by_name", "created_at", "updated_at",
             "addresses", "category_assignments",
-            "org_relations", "notes", "attachments",
+            "memberships", "notes", "attachments",
         ]
         read_only_fields = fields
+
+    def get_memberships(self, obj):
+        from organizations.serializers import PersonMembershipSerializer as MembershipSer
+        qs = getattr(obj, "memberships", None)
+        if qs is None:
+            return []
+        return MembershipSer(qs.all(), many=True).data
 
     def get_created_by_name(self, obj) -> str | None:
         created_by = obj.party.created_by

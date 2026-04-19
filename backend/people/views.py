@@ -26,8 +26,6 @@ from .exceptions import (
     DuplicateCategoryAssignmentError,
     DuplicatePersonError,
     MergePersonError,
-    OrganizationRelationConflictError,
-    OrganizationRelationNotFoundError,
     PersonInactiveError,
     PersonNotFoundError,
 )
@@ -35,9 +33,6 @@ from .serializers import (
     CategoryAssignWriteSerializer,
     DuplicateCandidateSerializer,
     DuplicateCheckSerializer,
-    OrganizationPersonRelationSerializer,
-    OrganizationPersonRelationUpdateSerializer,
-    OrganizationPersonRelationWriteSerializer,
     PersonAddressSerializer,
     PersonAddressWriteSerializer,
     PersonAttachmentSerializer,
@@ -499,78 +494,6 @@ def person_notes(request, person_id):
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response(PersonNoteSerializer(note).data, status=status.HTTP_201_CREATED)
-
-
-# ─── Person → Organization Relation Views ─────────────────────────────────────
-
-@api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
-def person_organizations(request, person_id):
-    """
-    GET  /api/people/persons/<id>/organizations/  — list org relations
-    POST /api/people/persons/<id>/organizations/  — link to an organization
-    """
-    if request.method == "GET":
-        active_only = request.query_params.get("active_only", "false").lower() == "true"
-        relations = selectors.get_person_organizations(
-            person_id=person_id, active_only=active_only
-        )
-        return Response(OrganizationPersonRelationSerializer(relations, many=True).data)
-
-    serializer = OrganizationPersonRelationWriteSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    data = dict(serializer.validated_data)
-    data["person_id"] = person_id
-
-    try:
-        relation = services.link_person_to_organization(
-            data=data, created_by=request.user
-        )
-    except PersonNotFoundError:
-        return _not_found(f"Person {person_id} not found.")
-    except OrganizationRelationConflictError as exc:
-        return _conflict(str(exc))
-
-    return Response(
-        OrganizationPersonRelationSerializer(relation).data,
-        status=status.HTTP_201_CREATED,
-    )
-
-
-@api_view(["PATCH"])
-@permission_classes([IsAuthenticated])
-def person_organization_update(request, person_id, relation_id):
-    """PATCH /api/people/persons/<id>/organizations/<rel_id>/"""
-    serializer = OrganizationPersonRelationUpdateSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        relation = services.update_organization_relationship(
-            relation_id=relation_id,
-            data=dict(serializer.validated_data),
-            updated_by=request.user,
-        )
-    except OrganizationRelationNotFoundError as exc:
-        return _not_found(str(exc))
-
-    return Response(OrganizationPersonRelationSerializer(relation).data)
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def person_organization_close(request, person_id, relation_id):
-    """POST /api/people/persons/<id>/organizations/<rel_id>/close/"""
-    try:
-        services.close_organization_relationship(
-            relation_id=relation_id, closed_by=request.user
-        )
-    except OrganizationRelationNotFoundError as exc:
-        return _not_found(str(exc))
-
-    return Response({"detail": "Organization relation closed."})
 
 
 # ─── Person → Attachment Views (Phase 2) ──────────────────────────────────────
